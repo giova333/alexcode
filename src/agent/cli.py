@@ -27,7 +27,7 @@ class CLI:
             Panel(
                 f"[bold]AI Agent[/bold] — {provider}/{model}\n"
                 "Type your message and press Enter. Use \\\\ for multiline.\n"
-                "Commands: /exit, /clear, /history",
+                "Commands: /exit, /clear, /history, /model",
                 border_style="blue",
             )
         )

@@ -22,6 +22,20 @@ from agent.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
+# Shortcuts for /model command — maps aliases to full model IDs
+MODEL_ALIASES: dict[str, str] = {
+    # Current generation
+    "opus": "claude-opus-4-6",
+    "sonnet": "claude-sonnet-4-6",
+    "haiku": "claude-haiku-4-5-20251001",
+    # Previous generations
+    "sonnet-4.5": "claude-sonnet-4-5-20250929",
+    "opus-4.5": "claude-opus-4-5-20251101",
+    "opus-4.1": "claude-opus-4-1-20250805",
+    "sonnet-4": "claude-sonnet-4-20250514",
+    "opus-4": "claude-opus-4-20250514",
+}
+
 FALLBACK_SYSTEM_PROMPT = """\
 You are an AI coding agent. You help users with software engineering tasks.
 Be concise and direct. Prefer action over explanation.
@@ -154,8 +168,24 @@ class AgentLoop:
             if not invocable and not model_only:
                 self._cli.print_info("  No skills loaded.")
             return True
+        elif cmd == "/model":
+            if not arg:
+                aliases = ", ".join(f"{k}" for k in MODEL_ALIASES)
+                self._cli.print_info(f"Current model: {self._config.model}")
+                self._cli.print_info(f"Usage: /model <name>")
+                self._cli.print_info(f"Shortcuts: {aliases}")
+                return True
+            new_model = MODEL_ALIASES.get(arg.lower(), arg)
+            self._config.model = new_model
+            self._llm._model = new_model
+            self._cli.print_info(f"Switched to model: {new_model}")
+            return True
+        elif cmd == "/prompt":
+            system = await self._build_system_prompt()
+            self._cli.print_assistant_text(f"```\n{system}\n```")
+            return True
         elif cmd == "/help":
-            self._cli.print_info("Commands: /exit /clear /history /tokens /tools /sessions /compact /skills /help")
+            self._cli.print_info("Commands: /exit /clear /history /tokens /tools /sessions /compact /skills /model /prompt /help")
             invocable = [s for s in self._skills if s.user_invocable]
             if invocable:
                 self._cli.print_info(f"Skills: {', '.join('/' + s.name for s in invocable)}")

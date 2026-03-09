@@ -100,7 +100,7 @@ class ToolsConfig:
 @dataclass
 class Config:
     provider: str = "anthropic"
-    model: str = "claude-sonnet-4-20250514"
+    model: str = "claude-sonnet-4-6"
     max_tokens: int = 8192
     prompts_dir: str = "prompts/"
     anthropic: AnthropicConfig = field(default_factory=AnthropicConfig)

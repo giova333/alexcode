@@ -1,5 +1,5 @@
 provider: anthropic
-model: claude-sonnet-4-20250514
+model: claude-sonnet-4-6
 max_tokens: 8192
 prompts_dir: prompts/
 
@@ -48,7 +48,11 @@ skills:
   dirs:
     - skills/
 
-mcp_servers: []
+mcp_servers:
+  - name: playwright
+    transport: stdio
+    command: npx
+    args: ["-y", "--registry", "https://registry.npmjs.org", "@playwright/mcp@latest"]
 
 tools:
   bash_timeout: 120
