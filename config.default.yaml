@@ -1,6 +1,7 @@
 provider: anthropic
 model: claude-sonnet-4-20250514
 max_tokens: 8192
+prompts_dir: prompts/
 
 anthropic:
   api_key: "${ANTHROPIC_API_KEY}"
@@ -28,7 +29,6 @@ compaction:
 memory:
   enabled: true
   memory_file: MEMORY.md
-  memory_dir: memory/
   daily_dir: memory/daily/
   context_days: 2                # days of daily notes in system prompt
   index_on_startup: true         # index memory + recent history at startup

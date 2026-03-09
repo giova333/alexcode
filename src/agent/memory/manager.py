@@ -13,7 +13,12 @@ logger = logging.getLogger(__name__)
 
 
 class MemoryManager:
-    """Orchestrates memory reads, writes, indexing, and search."""
+    """Orchestrates memory reads, writes, indexing, and search.
+
+    Two storage layers:
+      - MEMORY.md: stable, long-term knowledge (project conventions, user prefs, architecture)
+      - daily/YYYY-MM-DD.md: everything else (session notes, decisions, discoveries, activity)
+    """
 
     def __init__(
         self,
@@ -25,7 +30,7 @@ class MemoryManager:
         self._config = config
         self._base_dir = base_dir
         self._history_dir = history_dir
-        self._files = MemoryFiles(config.memory_file, config.memory_dir, base_dir)
+        self._files = MemoryFiles(config.memory_file, base_dir)
         self._daily = DailyMemory(config.daily_dir, base_dir)
         self._embedding_config = embedding_config
         self._indexer = None
@@ -54,11 +59,10 @@ class MemoryManager:
         """Load memory content for the system prompt: MEMORY.md + last N days of daily notes."""
         parts = []
 
-        main = self._files.read_main()
+        main = self._files.read()
         if main:
             parts.append(main)
 
-        # Load last N days of daily notes (configurable, default 2)
         recent_days = self._daily.read_recent(days=self._config.context_days)
         for dt, content in recent_days:
             parts.append(f"\n## Notes — {dt.isoformat()}\n{content}")
@@ -67,28 +71,17 @@ class MemoryManager:
 
     # ── Write operations ───────────────────────────────────────────────
 
-    async def flush(self, data: str, topic: str | None = None) -> None:
-        """Write extracted info to memory files and re-index."""
-        if topic:
-            self._files.append_topic(topic, data)
-        else:
-            self._files.append_main(data)
-
-        self._daily.append(f"Memory flush: {data[:200]}")
-
-        # Re-index the changed file
+    async def save_daily(self, content: str) -> str:
+        """Save to today's daily file (default destination for most memory writes)."""
+        self._daily.append(content)
         self._index_memory_files()
+        return "Saved to today's daily notes."
 
-    async def save(self, content: str, topic: str | None = None) -> str:
-        """Save a memory entry (called by the memory_save tool)."""
-        if topic:
-            self._files.append_topic(topic, content)
-            self._index_memory_files()
-            return f"Saved to topic '{topic}'."
-        else:
-            self._files.append_main(content)
-            self._index_memory_files()
-            return "Saved to main memory."
+    async def save_main(self, content: str) -> str:
+        """Save to MEMORY.md (stable, long-term knowledge only)."""
+        self._files.append(content)
+        self._index_memory_files()
+        return "Saved to MEMORY.md."
 
     async def append_daily(self, entry: str) -> None:
         """Add a timestamped entry to today's daily file."""
@@ -97,13 +90,7 @@ class MemoryManager:
     # ── Read operations (for tools) ────────────────────────────────────
 
     async def read_main(self) -> str:
-        return self._files.read_main()
-
-    async def read_topic(self, topic: str) -> str:
-        return self._files.read_topic(topic)
-
-    async def list_topics(self) -> list[str]:
-        return self._files.list_topics()
+        return self._files.read()
 
     async def read_daily(self, date_str: str | None = None) -> str:
         """Read daily notes. If date_str is None, read today's."""
@@ -121,7 +108,6 @@ class MemoryManager:
     async def search(self, query: str, top_k: int = 10) -> list[dict]:
         """Hybrid search across all indexed memory and history."""
         if not self._ensure_search():
-            # Fallback: simple text search across memory files
             return self._fallback_search(query, top_k)
 
         results = self._searcher.search(query, top_k=top_k)
@@ -135,23 +121,12 @@ class MemoryManager:
         query_lower = query.lower()
         results = []
 
-        # Search main memory
-        main = self._files.read_main()
+        main = self._files.read()
         if main and query_lower in main.lower():
-            # Extract relevant paragraph
             for para in main.split("\n\n"):
                 if query_lower in para.lower():
                     results.append({"text": para[:700], "source": "MEMORY.md", "score": 1.0})
 
-        # Search topic files
-        for topic in self._files.list_topics():
-            content = self._files.read_topic(topic)
-            if content and query_lower in content.lower():
-                for para in content.split("\n\n"):
-                    if query_lower in para.lower():
-                        results.append({"text": para[:700], "source": f"topics/{topic}.md", "score": 0.8})
-
-        # Search recent daily files
         for dt, content in self._daily.read_recent(days=7):
             if query_lower in content.lower():
                 for para in content.split("\n\n"):
@@ -170,23 +145,15 @@ class MemoryManager:
         return total
 
     def _index_memory_files(self) -> int:
-        """Index MEMORY.md, topic files, and recent daily notes."""
+        """Index MEMORY.md and recent daily notes."""
         if not self._ensure_search():
             return 0
 
         total = 0
-        # Main memory
-        main = self._files.read_main()
+        main = self._files.read()
         if main:
             total += self._indexer.index_text("MEMORY.md", main)
 
-        # Topics
-        for topic in self._files.list_topics():
-            content = self._files.read_topic(topic)
-            if content:
-                total += self._indexer.index_text(f"topics/{topic}.md", content)
-
-        # Last 7 days of daily notes
         for dt, content in self._daily.read_recent(days=7):
             total += self._indexer.index_text(f"daily/{dt.isoformat()}.md", content)
 
@@ -208,7 +175,6 @@ class MemoryManager:
         total = 0
 
         for path in sorted(history_dir.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True):
-            # Only index sessions from last 2 days
             try:
                 mtime = datetime.fromtimestamp(path.stat().st_mtime)
                 if mtime < cutoff:

@@ -53,7 +53,7 @@ async def _async_main(args: argparse.Namespace) -> None:
 
     # Tools
     tool_registry = ToolRegistry()
-    register_builtins(tool_registry, config, memory_manager=memory_manager)
+    register_builtins(tool_registry, config, cli, memory_manager=memory_manager)
     tool_executor = ToolExecutor(tool_registry)
 
     # MCP servers
@@ -84,6 +84,7 @@ async def _async_main(args: argparse.Namespace) -> None:
         config=config,
         llm=llm,
         cli=cli,
+        project_dir=project_dir,
         tool_registry=tool_registry,
         tool_executor=tool_executor,
         memory_manager=memory_manager,

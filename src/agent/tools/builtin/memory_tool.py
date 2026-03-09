@@ -9,7 +9,7 @@ from agent.memory.manager import MemoryManager
 
 
 class MemorySearchTool:
-    """Search across all memory: MEMORY.md, topics, daily notes, and conversation history."""
+    """Search across all memory: MEMORY.md, daily notes, and conversation history."""
 
     def __init__(self, memory_manager: MemoryManager) -> None:
         self._memory = memory_manager
@@ -23,8 +23,7 @@ class MemorySearchTool:
         return (
             "Search the agent's persistent memory including past conversations, daily notes, "
             "and saved knowledge. Use this when you need to recall something from a previous "
-            "session, find a decision that was made earlier, or look up project-specific knowledge "
-            "that was previously learned."
+            "session, find a decision that was made earlier, or look up project-specific knowledge."
         )
 
     @property
@@ -67,10 +66,10 @@ class MemorySaveTool:
     @property
     def description(self) -> str:
         return (
-            "Save important information to persistent memory so it can be recalled in future "
-            "conversations. Use this to remember: key decisions, user preferences, project "
-            "conventions, solutions to problems, important file paths, or anything the user "
-            "asks you to remember. Optionally specify a topic to organize by subject."
+            "Save information to persistent memory. By default writes to today's daily notes. "
+            "Use target='main' ONLY for stable, long-term knowledge that won't change "
+            "(project conventions, user preferences, architecture decisions). "
+            "Everything else — session notes, discoveries, decisions, activity — goes to daily."
         )
 
     @property
@@ -80,11 +79,13 @@ class MemorySaveTool:
             "properties": {
                 "content": {
                     "type": "string",
-                    "description": "The information to save. Use concise markdown bullet points.",
+                    "description": "The information to save. Use concise markdown.",
                 },
-                "topic": {
+                "target": {
                     "type": "string",
-                    "description": "Optional topic name to organize the memory (e.g., 'debugging', 'architecture', 'preferences'). If omitted, saves to main memory.",
+                    "enum": ["daily", "main"],
+                    "description": "Where to save: 'daily' (default) for today's notes, 'main' for stable long-term MEMORY.md.",
+                    "default": "daily",
                 },
             },
             "required": ["content"],
@@ -92,13 +93,14 @@ class MemorySaveTool:
 
     async def execute(self, **params: Any) -> str:
         content = params["content"]
-        topic = params.get("topic")
-        result = await self._memory.save(content, topic=topic)
-        return result
+        target = params.get("target", "daily")
+        if target == "main":
+            return await self._memory.save_main(content)
+        return await self._memory.save_daily(content)
 
 
 class MemoryReadTool:
-    """Read specific memory files and topics."""
+    """Read specific memory files."""
 
     def __init__(self, memory_manager: MemoryManager) -> None:
         self._memory = memory_manager
@@ -110,9 +112,8 @@ class MemoryReadTool:
     @property
     def description(self) -> str:
         return (
-            "Read the contents of a specific memory file. Can read the main MEMORY.md, "
-            "a topic file, or daily notes for a specific date. Use this after memory_search "
-            "identifies a relevant source, or to check what's already stored."
+            "Read the contents of a memory file. Can read MEMORY.md or daily notes "
+            "for a specific date. Use after memory_search identifies a relevant source."
         )
 
     @property
@@ -122,12 +123,13 @@ class MemoryReadTool:
             "properties": {
                 "target": {
                     "type": "string",
-                    "description": "What to read: 'main' for MEMORY.md, 'topics' to list all topics, or a topic name to read that topic file.",
+                    "enum": ["main", "daily", "dates"],
+                    "description": "What to read: 'main' for MEMORY.md, 'daily' for a day's notes, 'dates' to list available daily files.",
                     "default": "main",
                 },
                 "date": {
                     "type": "string",
-                    "description": "For daily notes: ISO date string (YYYY-MM-DD). If provided, reads that day's notes.",
+                    "description": "For daily notes: ISO date string (YYYY-MM-DD). If omitted with target='daily', reads today's notes.",
                 },
             },
         }
@@ -136,20 +138,17 @@ class MemoryReadTool:
         target = params.get("target", "main")
         date_str = params.get("date")
 
-        if date_str:
+        if target == "dates":
+            dates = await self._memory.list_daily_dates()
+            if not dates:
+                return "No daily note files found."
+            return "Available dates:\n" + "\n".join(f"- {d}" for d in dates)
+
+        if target == "daily":
             content = await self._memory.read_daily(date_str)
-            return content if content else f"No daily notes for {date_str}."
+            label = date_str or "today"
+            return content if content else f"No daily notes for {label}."
 
-        if target == "main":
-            content = await self._memory.read_main()
-            return content if content else "Main memory is empty."
-
-        if target == "topics":
-            topics = await self._memory.list_topics()
-            if not topics:
-                return "No topic files found."
-            return "Available topics:\n" + "\n".join(f"- {t}" for t in topics)
-
-        # Read specific topic
-        content = await self._memory.read_topic(target)
-        return content if content else f"Topic '{target}' not found."
+        # main
+        content = await self._memory.read_main()
+        return content if content else "MEMORY.md is empty."

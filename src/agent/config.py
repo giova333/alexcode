@@ -67,7 +67,6 @@ class CompactionConfig:
 class MemoryConfig:
     enabled: bool = True
     memory_file: str = "MEMORY.md"
-    memory_dir: str = "memory/"
     daily_dir: str = "memory/daily/"
     context_days: int = 2          # days of daily notes to include in system prompt
     index_on_startup: bool = True  # index memory + recent history on startup
@@ -103,6 +102,7 @@ class Config:
     provider: str = "anthropic"
     model: str = "claude-sonnet-4-20250514"
     max_tokens: int = 8192
+    prompts_dir: str = "prompts/"
     anthropic: AnthropicConfig = field(default_factory=AnthropicConfig)
     openai: OpenAIConfig = field(default_factory=OpenAIConfig)
     reasoning: ReasoningConfig = field(default_factory=ReasoningConfig)
@@ -180,6 +180,7 @@ def _dict_to_config(data: dict) -> Config:
         provider=data.get("provider", "anthropic"),
         model=data.get("model", "claude-sonnet-4-20250514"),
         max_tokens=data.get("max_tokens", 8192),
+        prompts_dir=data.get("prompts_dir", "prompts/"),
         anthropic=anthropic_cfg,
         openai=openai_cfg,
         reasoning=ReasoningConfig(**data.get("reasoning", {})),

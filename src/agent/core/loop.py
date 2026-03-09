@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+from pathlib import Path
 from typing import Any
 
 from agent.cli import CLI
@@ -18,18 +20,20 @@ from agent.skills.skill import Skill
 from agent.tools.executor import ToolExecutor
 from agent.tools.registry import ToolRegistry
 
+logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """\
+FALLBACK_SYSTEM_PROMPT = """\
 You are an AI coding agent. You help users with software engineering tasks.
-You have access to tools for reading, writing, and searching files, as well as running shell commands.
 Be concise and direct. Prefer action over explanation.
-When you need to examine something, use the appropriate tool rather than asking the user.
-
-You have persistent memory across sessions. Use memory_search to recall past decisions, solutions, \
-or context from previous conversations. Use memory_save to persist important information \
-(decisions, user preferences, project conventions, solutions) that should be remembered. \
-Your recent daily notes are automatically included in context below.
 """
+
+
+def _load_prompt(prompts_dir: Path, name: str) -> str:
+    """Load a prompt template from a .md file, or return empty string."""
+    path = prompts_dir / f"{name}.md"
+    if path.exists():
+        return path.read_text().strip()
+    return ""
 
 
 class AgentLoop:
@@ -40,6 +44,7 @@ class AgentLoop:
         config: Config,
         llm: LLMProvider,
         cli: CLI,
+        project_dir: Path,
         tool_registry: ToolRegistry | None = None,
         tool_executor: ToolExecutor | None = None,
         memory_manager: MemoryManager | None = None,
@@ -50,6 +55,7 @@ class AgentLoop:
         self._config = config
         self._llm = llm
         self._cli = cli
+        self._prompts_dir = project_dir / config.prompts_dir
         self._conversation = Conversation()
         self._tool_registry = tool_registry
         self._tool_executor = tool_executor
@@ -287,7 +293,8 @@ class AgentLoop:
             return f"Error executing {name}: {e}", True
 
     async def _build_system_prompt(self) -> str:
-        parts = [SYSTEM_PROMPT]
+        system = _load_prompt(self._prompts_dir, "SYSTEM") or FALLBACK_SYSTEM_PROMPT
+        parts = [system]
 
         # Memory context
         if self._memory_manager:
