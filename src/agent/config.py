@@ -89,7 +89,6 @@ class HistoryConfig:
 @dataclass
 class SkillsConfig:
     dirs: list[str] = field(default_factory=lambda: ["skills/"])
-    auto_activate: bool = True
 
 
 @dataclass

@@ -65,7 +65,9 @@ class AgentLoop:
         self._cli.print_welcome(self._config.provider, self._config.model)
 
         if self._skills:
-            self._cli.print_info(f"Loaded {len(self._skills)} skill(s): {', '.join(s.name for s in self._skills)}")
+            invocable = [s for s in self._skills if s.user_invocable]
+            if invocable:
+                self._cli.print_info(f"Skills: {', '.join('/' + s.name for s in invocable)}")
 
         while True:
             user_input = await self._cli.get_input()
@@ -74,7 +76,7 @@ class AgentLoop:
                 self._cli.print_info("Goodbye!")
                 break
 
-            # Handle commands
+            # Handle built-in commands and skill invocations
             if user_input.startswith("/"):
                 if await self._handle_command(user_input):
                     continue
@@ -123,37 +125,50 @@ class AgentLoop:
             await self._compactor.maybe_compact()
             self._cli.print_info(f"Compacted. Tokens: {self._conversation.total_tokens:,}")
             return True
-        elif cmd == "/skill":
-            if arg:
-                self._toggle_skill(arg)
-            else:
-                for s in self._skills:
-                    status = "active" if s.active else "inactive"
-                    self._cli.print_info(f"  {s.name} [{status}] — {s.description}")
+        elif cmd == "/skills":
+            invocable = [s for s in self._skills if s.user_invocable]
+            model_only = [s for s in self._skills if not s.user_invocable and not s.disable_model_invocation]
+            if invocable:
+                self._cli.print_info("  User-invocable skills:")
+                for s in invocable:
+                    hint = f" {s.argument_hint}" if s.argument_hint else ""
+                    self._cli.print_info(f"    /{s.name}{hint} — {s.description}")
+            if model_only:
+                self._cli.print_info("  Background skills (auto-activated by LLM):")
+                for s in model_only:
+                    self._cli.print_info(f"    {s.name} — {s.description}")
+            if not invocable and not model_only:
+                self._cli.print_info("  No skills loaded.")
             return True
         elif cmd == "/help":
-            self._cli.print_info("Commands: /exit /clear /history /tokens /tools /sessions /compact /skill /help")
+            self._cli.print_info("Commands: /exit /clear /history /tokens /tools /sessions /compact /skills /help")
+            invocable = [s for s in self._skills if s.user_invocable]
+            if invocable:
+                self._cli.print_info(f"Skills: {', '.join('/' + s.name for s in invocable)}")
             return True
+        else:
+            # Check if it's a skill invocation: /skill-name [args]
+            skill_name = cmd[1:]  # strip leading /
+            if self._skill_loader:
+                skill = self._skill_loader.get_by_name(skill_name, self._skills)
+                if skill and skill.user_invocable:
+                    await self._invoke_skill(skill, arg)
+                    return True
         return False
 
-    def _toggle_skill(self, name: str) -> None:
-        for skill in self._skills:
-            if skill.name == name:
-                skill.active = not skill.active
-                status = "activated" if skill.active else "deactivated"
-                self._cli.print_info(f"Skill '{name}' {status}.")
-                return
-        self._cli.print_error(f"Skill '{name}' not found.")
+    async def _invoke_skill(self, skill: Skill, arguments: str) -> None:
+        """Invoke a skill: load its full body, render with arguments, send as user message."""
+        rendered = skill.render(arguments)
+        if not rendered:
+            self._cli.print_error(f"Skill '{skill.name}' has no instructions.")
+            return
+
+        self._cli.print_info(f"Running skill: {skill.name}")
+        # The rendered skill prompt becomes the user message
+        await self._process_message(rendered)
 
     async def _process_message(self, user_input: str) -> None:
         """Process a user message through the full LLM cycle."""
-        # Auto-activate skills
-        if self._skill_loader and self._config.skills.auto_activate:
-            matched = self._skill_loader.match_skills(user_input, self._skills)
-            for skill in matched:
-                skill.active = True
-                self._cli.print_info(f"Auto-activated skill: {skill.name}")
-
         user_msg = Message.user(user_input)
         user_msg.token_count = count_message_tokens(user_msg.to_dict())
         self._conversation.append(user_msg)
@@ -277,13 +292,15 @@ class AgentLoop:
             except Exception:
                 pass
 
-        # Active skill instructions
-        active_skills = [s for s in self._skills if s.active]
-        if active_skills:
-            parts.append("\n# Active Skills")
-            for skill in active_skills:
-                if skill.instructions:
-                    parts.append(f"\n## {skill.name}\n{skill.instructions}")
+        # Skill metadata for LLM discovery (only name + description, not full body)
+        if self._skill_loader:
+            model_skills = self._skill_loader.get_model_available(self._skills)
+            if model_skills:
+                parts.append("\n# Available Skills")
+                parts.append("The following skills are available. To invoke a skill, use the Skill tool with the skill name.")
+                for skill in model_skills:
+                    desc = f": {skill.description}" if skill.description else ""
+                    parts.append(f"- {skill.name}{desc}")
 
         return "\n".join(parts)
 

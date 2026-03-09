@@ -97,8 +97,8 @@ Type your message and press **Enter** to send. Use `\` at the end of a line for 
 | `/tools` | List available tools |
 | `/sessions` | List saved conversation sessions |
 | `/compact` | Manually trigger conversation compaction |
-| `/skill` | List all skills and their status |
-| `/skill <name>` | Toggle a skill on/off |
+| `/skills` | List all available skills |
+| `/<skill-name> [args]` | Invoke a skill (e.g., `/review-pr 123`) |
 
 ## Built-in Tools
 
@@ -193,24 +193,54 @@ MCP tools are registered on startup and appear as `mcp__<server>__<tool>` (e.g.,
 
 ## Skills
 
-Skills are YAML files that inject domain-specific instructions into the agent's prompt. Place them in `skills/`.
+Skills follow the [Anthropic Agent Skills](https://agentskills.io) convention. Each skill is a directory containing a `SKILL.md` file with YAML frontmatter.
 
-### Example: `skills/python-dev.yaml`
+### Discovery Locations
 
-```yaml
-name: python-dev
-description: Python development conventions
-trigger_patterns:
-  - "(?i)python|pytest|pip|venv"
-instructions: |
-  Follow these Python conventions:
-  - Use type hints on all function signatures
-  - Prefer pathlib over os.path
-  - Use pytest for testing
-  - Follow PEP 8
+Skills are discovered from (higher precedence wins):
+1. **Project:** `.agent/skills/<name>/SKILL.md`
+2. **Custom dirs:** paths listed in `skills.dirs` config
+3. **Personal:** `~/.config/agent/skills/<name>/SKILL.md`
+
+### Example: `.agent/skills/review-pr/SKILL.md`
+
+```markdown
+---
+name: review-pr
+description: Reviews a pull request for bugs, style issues, and best practices. Use when the user asks to review a PR.
+argument-hint: "[pr-number]"
+allowed-tools: Read, Grep, Glob
+---
+
+Review pull request #$ARGUMENTS.
+
+PR diff:
+!`gh pr diff $0`
+
+Check for:
+- Bugs and logic errors
+- Security vulnerabilities
+- Code style issues
+- Missing error handling
 ```
 
-Skills auto-activate when a message matches `trigger_patterns`. Toggle manually with `/skill python-dev`.
+### Frontmatter Fields
+
+| Field | Default | Description |
+|---|---|---|
+| `name` | directory name | Becomes the `/slash-command` name |
+| `description` | | Used by LLM to decide when to invoke (keep under 1024 chars) |
+| `user-invocable` | `true` | Whether it appears as a `/command` |
+| `disable-model-invocation` | `false` | Set `true` to prevent LLM from auto-invoking (e.g., `/deploy`) |
+| `argument-hint` | | Shown in help (e.g., `[filename]`) |
+| `allowed-tools` | | Comma-separated tool names |
+
+### How It Works
+
+- **Startup:** Only metadata (name + description) is loaded into the system prompt (~100 tokens per skill)
+- **Invocation:** Type `/review-pr 123` to invoke. The full SKILL.md body is loaded, arguments substituted (`$ARGUMENTS`, `$0`, `$1`), and dynamic context (`!`command``) resolved
+- **LLM auto-invoke:** Unless `disable-model-invocation: true`, the LLM can see skill metadata and decide to suggest invoking it
+- **Supporting files:** Place templates, scripts, references alongside SKILL.md in the same directory
 
 ## Project Structure
 
