@@ -24,6 +24,11 @@ You are an AI coding agent. You help users with software engineering tasks.
 You have access to tools for reading, writing, and searching files, as well as running shell commands.
 Be concise and direct. Prefer action over explanation.
 When you need to examine something, use the appropriate tool rather than asking the user.
+
+You have persistent memory across sessions. Use memory_search to recall past decisions, solutions, \
+or context from previous conversations. Use memory_save to persist important information \
+(decisions, user preferences, project conventions, solutions) that should be remembered. \
+Your recent daily notes are automatically included in context below.
 """
 
 
@@ -121,9 +126,12 @@ class AgentLoop:
                     )
             return True
         elif cmd == "/compact":
-            self._cli.print_compaction_notice()
-            await self._compactor.maybe_compact()
-            self._cli.print_info(f"Compacted. Tokens: {self._conversation.total_tokens:,}")
+            compacted = await self._compactor.maybe_compact()
+            if compacted:
+                self._cli.print_compaction_notice()
+                self._cli.print_info(f"Compacted. Tokens: {self._conversation.total_tokens:,}")
+            else:
+                self._cli.print_info(f"No compaction needed. Tokens: {self._conversation.total_tokens:,}")
             return True
         elif cmd == "/skills":
             invocable = [s for s in self._skills if s.user_invocable]
@@ -182,9 +190,7 @@ class AgentLoop:
 
     async def _run_llm_cycle(self) -> None:
         """Call LLM, handle tool use, repeat until text response."""
-        max_iterations = 25
-
-        for _ in range(max_iterations):
+        while True:
             system = await self._build_system_prompt()
             tools = self._get_tool_definitions()
 
@@ -297,7 +303,7 @@ class AgentLoop:
             model_skills = self._skill_loader.get_model_available(self._skills)
             if model_skills:
                 parts.append("\n# Available Skills")
-                parts.append("The following skills are available. To invoke a skill, use the Skill tool with the skill name.")
+                parts.append("The following skills can be suggested to the user via slash commands (e.g., /skill-name).")
                 for skill in model_skills:
                     desc = f": {skill.description}" if skill.description else ""
                     parts.append(f"- {skill.name}{desc}")
@@ -312,3 +318,24 @@ class AgentLoop:
     def _save_history(self) -> None:
         if self._history and self._conversation.messages:
             self._history.save(self._session_id, self._conversation.messages)
+
+            # Index this session for future memory search
+            if self._memory_manager:
+                try:
+                    text_parts = []
+                    for msg in self._conversation.messages:
+                        if msg.text:
+                            text_parts.append(f"[{msg.role}]: {msg.text}")
+                        elif isinstance(msg.content, list):
+                            for block in msg.content:
+                                if block.get("type") == "tool_use":
+                                    text_parts.append(f"[assistant]: Called {block['name']}")
+                                elif block.get("type") == "tool_result":
+                                    preview = str(block.get("content", ""))[:500]
+                                    text_parts.append(f"[tool_result]: {preview}")
+                    if text_parts:
+                        self._memory_manager.index_session(
+                            "\n\n".join(text_parts), self._session_id
+                        )
+                except Exception:
+                    pass  # indexing is best-effort
