@@ -58,6 +58,18 @@ class CLI:
         """Print a streaming text chunk (no newline)."""
         self.console.print(text, end="", highlight=False)
 
+    def print_thinking_delta(self, text: str) -> None:
+        """Print a streaming thinking chunk (dimmed)."""
+        self.console.print(Text(text, style="dim italic"), end="", highlight=False)
+
+    def start_thinking(self) -> None:
+        """Called when thinking block starts."""
+        self.console.print(Text("  Thinking...", style="dim italic"))
+
+    def end_thinking(self) -> None:
+        """Called when thinking block ends."""
+        self.console.print()
+
     def start_response(self) -> None:
         """Called before streaming starts."""
         self.console.print()

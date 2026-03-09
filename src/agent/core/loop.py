@@ -11,7 +11,7 @@ from agent.core.conversation import Conversation
 from agent.core.message import Message
 from agent.core.tokens import count_message_tokens
 from agent.history.storage import HistoryStorage
-from agent.llm.base import LLMProvider, TextDelta, ToolUseEvent, ResponseComplete
+from agent.llm.base import LLMProvider, TextDelta, ThinkingDelta, ToolUseEvent, ResponseComplete
 from agent.memory.manager import MemoryManager
 from agent.skills.loader import SkillLoader
 from agent.skills.skill import Skill
@@ -176,6 +176,9 @@ class AgentLoop:
             text_parts: list[str] = []
             tool_uses: list[ToolUseEvent] = []
             usage_info = None
+            is_thinking = False
+
+            reasoning_cfg = self._config.reasoning if self._config.reasoning.enabled else None
 
             self._cli.start_response()
 
@@ -184,13 +187,29 @@ class AgentLoop:
                 messages=self._conversation.to_api_messages(),
                 tools=tools if tools else None,
                 max_tokens=self._config.max_tokens,
+                reasoning=reasoning_cfg,
             ):
-                if isinstance(event, TextDelta):
+                if isinstance(event, ThinkingDelta):
+                    if not is_thinking:
+                        is_thinking = True
+                        self._cli.start_thinking()
+                    if self._config.reasoning.show_thinking:
+                        self._cli.print_thinking_delta(event.text)
+                elif isinstance(event, TextDelta):
+                    if is_thinking:
+                        is_thinking = False
+                        self._cli.end_thinking()
                     text_parts.append(event.text)
                     self._cli.print_text_delta(event.text)
                 elif isinstance(event, ToolUseEvent):
+                    if is_thinking:
+                        is_thinking = False
+                        self._cli.end_thinking()
                     tool_uses.append(event)
                 elif isinstance(event, ResponseComplete):
+                    if is_thinking:
+                        is_thinking = False
+                        self._cli.end_thinking()
                     usage_info = event
 
             self._cli.end_response()

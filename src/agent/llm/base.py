@@ -5,10 +5,18 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Protocol
 
+from agent.config import ReasoningConfig
+
 
 @dataclass
 class TextDelta:
     """A chunk of streamed text."""
+    text: str
+
+
+@dataclass
+class ThinkingDelta:
+    """A chunk of streamed thinking/reasoning text."""
     text: str
 
 
@@ -35,7 +43,7 @@ class ResponseComplete:
 
 
 # Union of all stream events
-StreamEvent = TextDelta | ToolUseEvent | ResponseComplete
+StreamEvent = TextDelta | ThinkingDelta | ToolUseEvent | ResponseComplete
 
 
 class LLMProvider(Protocol):
@@ -47,9 +55,10 @@ class LLMProvider(Protocol):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         max_tokens: int = 8192,
+        reasoning: ReasoningConfig | None = None,
     ) -> AsyncIterator[StreamEvent]:
         """Stream a response from the LLM.
 
-        Yields StreamEvent instances: TextDelta, ToolUseEvent, ResponseComplete.
+        Yields StreamEvent instances: TextDelta, ThinkingDelta, ToolUseEvent, ResponseComplete.
         """
         ...

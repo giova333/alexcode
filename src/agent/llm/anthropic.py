@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, AsyncIterator
 
 import anthropic
 
-from agent.config import AnthropicConfig
+from agent.config import AnthropicConfig, ReasoningConfig
 from agent.llm.base import (
     ResponseComplete,
     StreamEvent,
     TextDelta,
+    ThinkingDelta,
     ToolUseEvent,
     UsageInfo,
 )
@@ -32,6 +34,7 @@ class AnthropicProvider:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         max_tokens: int = 8192,
+        reasoning: ReasoningConfig | None = None,
     ) -> AsyncIterator[StreamEvent]:
         kwargs: dict[str, Any] = {
             "model": self._model,
@@ -43,7 +46,19 @@ class AnthropicProvider:
         if tools:
             kwargs["tools"] = tools
 
+        # Extended thinking
+        if reasoning and reasoning.enabled:
+            budget = max(1024, reasoning.budget_tokens)
+            kwargs["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": budget,
+            }
+            # Anthropic requires max_tokens > budget_tokens when thinking is enabled
+            if max_tokens <= budget:
+                kwargs["max_tokens"] = budget + max_tokens
+
         async with self._client.messages.stream(**kwargs) as stream:
+            current_block_type = ""
             current_tool_id = ""
             current_tool_name = ""
             tool_input_json = ""
@@ -52,20 +67,26 @@ class AnthropicProvider:
                 if event.type == "content_block_start":
                     block = event.content_block
                     if block.type == "tool_use":
+                        current_block_type = "tool_use"
                         current_tool_id = block.id
                         current_tool_name = block.name
                         tool_input_json = ""
+                    elif block.type == "thinking":
+                        current_block_type = "thinking"
+                    elif block.type == "text":
+                        current_block_type = "text"
 
                 elif event.type == "content_block_delta":
                     delta = event.delta
                     if delta.type == "text_delta":
                         yield TextDelta(text=delta.text)
+                    elif delta.type == "thinking_delta":
+                        yield ThinkingDelta(text=delta.thinking)
                     elif delta.type == "input_json_delta":
                         tool_input_json += delta.partial_json
 
                 elif event.type == "content_block_stop":
-                    if current_tool_name:
-                        import json
+                    if current_block_type == "tool_use" and current_tool_name:
                         try:
                             input_data = json.loads(tool_input_json) if tool_input_json else {}
                         except json.JSONDecodeError:
@@ -75,9 +96,10 @@ class AnthropicProvider:
                             name=current_tool_name,
                             input=input_data,
                         )
-                        current_tool_id = ""
-                        current_tool_name = ""
-                        tool_input_json = ""
+                    current_block_type = ""
+                    current_tool_id = ""
+                    current_tool_name = ""
+                    tool_input_json = ""
 
                 elif event.type == "message_stop":
                     pass

@@ -9,11 +9,12 @@ from typing import Any, AsyncIterator
 import httpx
 from openai import AsyncOpenAI
 
-from agent.config import OpenAIConfig
+from agent.config import OpenAIConfig, ReasoningConfig
 from agent.llm.base import (
     ResponseComplete,
     StreamEvent,
     TextDelta,
+    ThinkingDelta,
     ToolUseEvent,
     UsageInfo,
 )
@@ -153,6 +154,7 @@ class OpenAIProvider:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         max_tokens: int = 8192,
+        reasoning: ReasoningConfig | None = None,
     ) -> AsyncIterator[StreamEvent]:
         client = await self._get_client()
 
@@ -170,6 +172,11 @@ class OpenAIProvider:
         }
         if tools:
             kwargs["tools"] = self._convert_tools(tools)
+
+        # OpenAI reasoning (o1/o3 models)
+        if reasoning and reasoning.enabled:
+            effort = reasoning.effort if reasoning.effort in ("low", "medium", "high") else "medium"
+            kwargs["reasoning_effort"] = effort
 
         # Track tool calls being built across chunks
         tool_call_buffers: dict[int, dict] = {}

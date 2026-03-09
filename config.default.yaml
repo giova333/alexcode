@@ -15,6 +15,12 @@ openai:
     token_url: ""
     scope: ""
 
+reasoning:
+  enabled: false
+  budget_tokens: 10000        # Anthropic: max tokens for thinking (must be >= 1024)
+  effort: medium              # OpenAI: low, medium, high (for o1/o3 models)
+  show_thinking: false        # Display thinking output in the terminal
+
 compaction:
   threshold_tokens: 80000
   keep_recent_messages: 10

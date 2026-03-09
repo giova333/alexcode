@@ -50,6 +50,14 @@ class OpenAIConfig:
 
 
 @dataclass
+class ReasoningConfig:
+    enabled: bool = False
+    budget_tokens: int = 10000
+    effort: str = "medium"  # low, medium, high (OpenAI o-series)
+    show_thinking: bool = False
+
+
+@dataclass
 class CompactionConfig:
     threshold_tokens: int = 80000
     keep_recent_messages: int = 10
@@ -96,6 +104,7 @@ class Config:
     max_tokens: int = 8192
     anthropic: AnthropicConfig = field(default_factory=AnthropicConfig)
     openai: OpenAIConfig = field(default_factory=OpenAIConfig)
+    reasoning: ReasoningConfig = field(default_factory=ReasoningConfig)
     compaction: CompactionConfig = field(default_factory=CompactionConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
@@ -172,6 +181,7 @@ def _dict_to_config(data: dict) -> Config:
         max_tokens=data.get("max_tokens", 8192),
         anthropic=anthropic_cfg,
         openai=openai_cfg,
+        reasoning=ReasoningConfig(**data.get("reasoning", {})),
         compaction=CompactionConfig(**data.get("compaction", {})),
         memory=MemoryConfig(**data.get("memory", {})),
         embedding=EmbeddingConfig(**data.get("embedding", {})),
