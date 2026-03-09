@@ -1,0 +1,242 @@
+# AI Agent
+
+A CLI-based AI coding agent with tool use, memory, MCP support, and conversation compaction. Supports Anthropic Claude and OpenAI as LLM providers.
+
+## Quick Start
+
+```bash
+# Install
+pip install -e .
+
+# Set your API key
+export ANTHROPIC_API_KEY="sk-ant-..."
+
+# Run
+python -m agent
+```
+
+## Requirements
+
+- Python 3.13+
+- An API key for Anthropic or OpenAI
+
+## Installation
+
+```bash
+cd /path/to/agent
+pip install -e .
+
+# Optional: install embedding support (adds ~400MB model on first use)
+pip install -e ".[embedding]"
+```
+
+## Configuration
+
+The agent reads config from three locations (merged in order):
+
+1. `config.default.yaml` (bundled defaults)
+2. `./config.yaml` (project-level overrides)
+3. `~/.config/agent/config.yaml` (user-level overrides)
+
+Environment variables are interpolated via `${VAR_NAME}` syntax.
+
+### Minimal `config.yaml`
+
+```yaml
+provider: anthropic
+model: claude-sonnet-4-20250514
+```
+
+### OpenAI with API key
+
+```yaml
+provider: openai
+model: gpt-4o
+
+openai:
+  api_key: "${OPENAI_API_KEY}"
+```
+
+### OpenAI with OAuth (Azure)
+
+```yaml
+provider: openai
+model: gpt-4o
+
+openai:
+  auth: oauth
+  base_url: "https://your-resource.openai.azure.com/openai/deployments/gpt-4o"
+  oauth:
+    client_id: "your-client-id"
+    client_secret: "${OPENAI_CLIENT_SECRET}"
+    token_url: "https://login.microsoftonline.com/your-tenant/oauth2/v2.0/token"
+    scope: "https://cognitiveservices.azure.com/.default"
+```
+
+## Usage
+
+```bash
+# Default (Anthropic)
+python -m agent
+
+# Override provider and model via CLI flags
+python -m agent --provider openai --model gpt-4o
+```
+
+Type your message and press **Enter** to send. Use `\` at the end of a line for multiline input.
+
+### Commands
+
+| Command | Description |
+|---|---|
+| `/help` | Show available commands |
+| `/exit` | Save history and exit |
+| `/clear` | Clear conversation and start a new session |
+| `/history` | Show current conversation messages |
+| `/tokens` | Show total token usage |
+| `/tools` | List available tools |
+| `/sessions` | List saved conversation sessions |
+| `/compact` | Manually trigger conversation compaction |
+| `/skill` | List all skills and their status |
+| `/skill <name>` | Toggle a skill on/off |
+
+## Built-in Tools
+
+The agent has access to these tools (called automatically by the LLM):
+
+| Tool | Description |
+|---|---|
+| `bash` | Execute shell commands (configurable timeout) |
+| `read` | Read file contents with line numbers |
+| `write` | Create or overwrite files |
+| `edit` | Find-and-replace text in files |
+| `glob` | Find files by glob pattern |
+| `grep` | Search file contents (uses ripgrep if available) |
+
+## Memory
+
+When `memory.enabled: true` (default), the agent loads `MEMORY.md` from the project root into its system prompt. This lets you persist project context across sessions.
+
+### File layout
+
+```
+MEMORY.md                  # Main memory (loaded into every prompt)
+memory/
+├── topics/
+│   ├── architecture.md    # Topic-specific notes
+│   └── decisions.md
+└── daily/
+    └── 2026-03-09.md      # Auto-generated daily notes
+```
+
+Create `MEMORY.md` manually or let the compaction system generate it.
+
+## Conversation Compaction
+
+When token usage exceeds the threshold (default: 80,000), the agent automatically:
+
+1. Asks the LLM to extract key facts and decisions
+2. Writes them to `MEMORY.md` and today's daily file
+3. Summarizes older messages, keeping the last 10 intact
+
+Configure in `config.yaml`:
+
+```yaml
+compaction:
+  threshold_tokens: 80000
+  keep_recent_messages: 10
+```
+
+## Conversation History
+
+All conversations are saved as JSON in `.agent/history/`. View past sessions with `/sessions`.
+
+## Embedding Search (Optional)
+
+For semantic search over memory and history:
+
+```bash
+pip install -e ".[embedding]"
+```
+
+Enable in `config.yaml`:
+
+```yaml
+embedding:
+  enabled: true
+  model: all-MiniLM-L6-v2   # downloaded on first use
+  hybrid_alpha: 0.7          # weight: 0=pure BM25, 1=pure semantic
+```
+
+Uses a hybrid of cosine similarity (sentence-transformers) and BM25 keyword search, stored in a local SQLite database.
+
+## MCP Servers
+
+Connect to [Model Context Protocol](https://modelcontextprotocol.io/) servers to add external tools.
+
+```yaml
+mcp_servers:
+  - name: filesystem
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/home/user/projects"]
+
+  - name: github
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-github"]
+    env:
+      GITHUB_TOKEN: "${GITHUB_TOKEN}"
+```
+
+MCP tools are registered on startup and appear as `mcp__<server>__<tool>` (e.g., `mcp__github__search_repositories`).
+
+## Skills
+
+Skills are YAML files that inject domain-specific instructions into the agent's prompt. Place them in `skills/`.
+
+### Example: `skills/python-dev.yaml`
+
+```yaml
+name: python-dev
+description: Python development conventions
+trigger_patterns:
+  - "(?i)python|pytest|pip|venv"
+instructions: |
+  Follow these Python conventions:
+  - Use type hints on all function signatures
+  - Prefer pathlib over os.path
+  - Use pytest for testing
+  - Follow PEP 8
+```
+
+Skills auto-activate when a message matches `trigger_patterns`. Toggle manually with `/skill python-dev`.
+
+## Project Structure
+
+```
+src/agent/
+├── __main__.py           # Entry point
+├── cli.py                # Terminal I/O (rich + prompt_toolkit)
+├── config.py             # YAML config loading
+├── core/
+│   ├── loop.py           # Main agent loop
+│   ├── message.py        # Message dataclasses
+│   ├── conversation.py   # Conversation state
+│   └── tokens.py         # Token counting (tiktoken)
+├── llm/
+│   ├── base.py           # LLMProvider protocol
+│   ├── anthropic.py      # Anthropic Claude provider
+│   └── openai.py         # OpenAI provider (API key + OAuth)
+├── tools/
+│   ├── base.py           # Tool protocol
+│   ├── registry.py       # Tool registry
+│   ├── executor.py       # Tool dispatcher
+│   ├── builtin/          # bash, read, write, edit, glob, grep
+│   └── mcp/              # MCP client + tool adapter
+├── skills/               # Skill loader
+├── memory/               # MEMORY.md, topic files, daily notes
+├── embedding/            # SQLite store, indexer, hybrid search
+├── compaction/           # Token-based compaction
+└── history/              # JSON conversation persistence
+```

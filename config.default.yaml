@@ -1,0 +1,47 @@
+provider: anthropic
+model: claude-sonnet-4-20250514
+max_tokens: 8192
+
+anthropic:
+  api_key: "${ANTHROPIC_API_KEY}"
+
+openai:
+  auth: api_key
+  api_key: "${OPENAI_API_KEY}"
+  base_url: null
+  oauth:
+    client_id: ""
+    client_secret: "${OPENAI_CLIENT_SECRET}"
+    token_url: ""
+    scope: ""
+
+compaction:
+  threshold_tokens: 80000
+  keep_recent_messages: 10
+
+memory:
+  enabled: true
+  memory_file: MEMORY.md
+  memory_dir: memory/
+  daily_dir: memory/daily/
+
+embedding:
+  enabled: false
+  model: all-MiniLM-L6-v2
+  db_path: .agent/embeddings.db
+  hybrid_alpha: 0.7
+  chunk_size: 512
+  chunk_overlap: 50
+
+history:
+  dir: .agent/history/
+
+skills:
+  dirs:
+    - skills/
+  auto_activate: true
+
+mcp_servers: []
+
+tools:
+  bash_timeout: 120

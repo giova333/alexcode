@@ -1,0 +1,278 @@
+"""Main agent loop: user -> LLM -> tools -> LLM -> ... -> text response."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from agent.cli import CLI
+from agent.compaction.compactor import Compactor
+from agent.config import Config
+from agent.core.conversation import Conversation
+from agent.core.message import Message
+from agent.core.tokens import count_message_tokens
+from agent.history.storage import HistoryStorage
+from agent.llm.base import LLMProvider, TextDelta, ToolUseEvent, ResponseComplete
+from agent.memory.manager import MemoryManager
+from agent.skills.loader import SkillLoader
+from agent.skills.skill import Skill
+from agent.tools.executor import ToolExecutor
+from agent.tools.registry import ToolRegistry
+
+
+SYSTEM_PROMPT = """\
+You are an AI coding agent. You help users with software engineering tasks.
+You have access to tools for reading, writing, and searching files, as well as running shell commands.
+Be concise and direct. Prefer action over explanation.
+When you need to examine something, use the appropriate tool rather than asking the user.
+"""
+
+
+class AgentLoop:
+    """Orchestrates the conversation between user, LLM, and tools."""
+
+    def __init__(
+        self,
+        config: Config,
+        llm: LLMProvider,
+        cli: CLI,
+        tool_registry: ToolRegistry | None = None,
+        tool_executor: ToolExecutor | None = None,
+        memory_manager: MemoryManager | None = None,
+        history: HistoryStorage | None = None,
+        skill_loader: SkillLoader | None = None,
+        skills: list[Skill] | None = None,
+    ) -> None:
+        self._config = config
+        self._llm = llm
+        self._cli = cli
+        self._conversation = Conversation()
+        self._tool_registry = tool_registry
+        self._tool_executor = tool_executor
+        self._memory_manager = memory_manager
+        self._history = history
+        self._session_id = history.new_session_id() if history else ""
+        self._skill_loader = skill_loader
+        self._skills = skills or []
+        self._compactor = Compactor(
+            config.compaction,
+            llm,
+            memory_manager,
+            self._conversation,
+        )
+
+    async def run(self) -> None:
+        """Main loop: read input, get response, repeat."""
+        self._cli.print_welcome(self._config.provider, self._config.model)
+
+        if self._skills:
+            self._cli.print_info(f"Loaded {len(self._skills)} skill(s): {', '.join(s.name for s in self._skills)}")
+
+        while True:
+            user_input = await self._cli.get_input()
+            if user_input is None:
+                self._save_history()
+                self._cli.print_info("Goodbye!")
+                break
+
+            # Handle commands
+            if user_input.startswith("/"):
+                if await self._handle_command(user_input):
+                    continue
+
+            await self._process_message(user_input)
+
+    async def _handle_command(self, command: str) -> bool:
+        """Handle slash commands. Returns True if handled."""
+        parts = command.strip().split(maxsplit=1)
+        cmd = parts[0].lower()
+        arg = parts[1] if len(parts) > 1 else ""
+
+        if cmd in ("/exit", "/quit"):
+            self._save_history()
+            raise SystemExit(0)
+        elif cmd == "/clear":
+            self._save_history()
+            self._conversation.clear()
+            if self._history:
+                self._session_id = self._history.new_session_id()
+            self._cli.print_info("Conversation cleared.")
+            return True
+        elif cmd == "/history":
+            for msg in self._conversation.messages:
+                role = msg.role
+                text = msg.text[:100] if msg.text else "(tool interaction)"
+                self._cli.print_info(f"  [{role}] {text}")
+            return True
+        elif cmd == "/tokens":
+            self._cli.print_info(f"Total tokens: {self._conversation.total_tokens:,}")
+            return True
+        elif cmd == "/tools":
+            if self._tool_registry:
+                for name in self._tool_registry.list_names():
+                    self._cli.print_info(f"  {name}")
+            return True
+        elif cmd == "/sessions":
+            if self._history:
+                for s in self._history.list_sessions():
+                    self._cli.print_info(
+                        f"  {s['session_id']} ({s['message_count']} messages) — {s['timestamp']}"
+                    )
+            return True
+        elif cmd == "/compact":
+            self._cli.print_compaction_notice()
+            await self._compactor.maybe_compact()
+            self._cli.print_info(f"Compacted. Tokens: {self._conversation.total_tokens:,}")
+            return True
+        elif cmd == "/skill":
+            if arg:
+                self._toggle_skill(arg)
+            else:
+                for s in self._skills:
+                    status = "active" if s.active else "inactive"
+                    self._cli.print_info(f"  {s.name} [{status}] — {s.description}")
+            return True
+        elif cmd == "/help":
+            self._cli.print_info("Commands: /exit /clear /history /tokens /tools /sessions /compact /skill /help")
+            return True
+        return False
+
+    def _toggle_skill(self, name: str) -> None:
+        for skill in self._skills:
+            if skill.name == name:
+                skill.active = not skill.active
+                status = "activated" if skill.active else "deactivated"
+                self._cli.print_info(f"Skill '{name}' {status}.")
+                return
+        self._cli.print_error(f"Skill '{name}' not found.")
+
+    async def _process_message(self, user_input: str) -> None:
+        """Process a user message through the full LLM cycle."""
+        # Auto-activate skills
+        if self._skill_loader and self._config.skills.auto_activate:
+            matched = self._skill_loader.match_skills(user_input, self._skills)
+            for skill in matched:
+                skill.active = True
+                self._cli.print_info(f"Auto-activated skill: {skill.name}")
+
+        user_msg = Message.user(user_input)
+        user_msg.token_count = count_message_tokens(user_msg.to_dict())
+        self._conversation.append(user_msg)
+
+        # Check compaction before calling LLM
+        if await self._compactor.maybe_compact():
+            self._cli.print_compaction_notice()
+
+        await self._run_llm_cycle()
+        self._save_history()
+
+    async def _run_llm_cycle(self) -> None:
+        """Call LLM, handle tool use, repeat until text response."""
+        max_iterations = 25
+
+        for _ in range(max_iterations):
+            system = await self._build_system_prompt()
+            tools = self._get_tool_definitions()
+
+            text_parts: list[str] = []
+            tool_uses: list[ToolUseEvent] = []
+            usage_info = None
+
+            self._cli.start_response()
+
+            async for event in self._llm.stream(
+                system=system,
+                messages=self._conversation.to_api_messages(),
+                tools=tools if tools else None,
+                max_tokens=self._config.max_tokens,
+            ):
+                if isinstance(event, TextDelta):
+                    text_parts.append(event.text)
+                    self._cli.print_text_delta(event.text)
+                elif isinstance(event, ToolUseEvent):
+                    tool_uses.append(event)
+                elif isinstance(event, ResponseComplete):
+                    usage_info = event
+
+            self._cli.end_response()
+
+            # Build assistant message
+            content_blocks: list[dict[str, Any]] = []
+            full_text = "".join(text_parts)
+            if full_text:
+                content_blocks.append({"type": "text", "text": full_text})
+            for tu in tool_uses:
+                content_blocks.append({
+                    "type": "tool_use",
+                    "id": tu.id,
+                    "name": tu.name,
+                    "input": tu.input,
+                })
+
+            if content_blocks:
+                assistant_msg = Message(role="assistant", content=content_blocks)
+                if usage_info:
+                    assistant_msg.token_count = usage_info.usage.input_tokens + usage_info.usage.output_tokens
+                self._conversation.append(assistant_msg)
+
+            if usage_info:
+                self._cli.print_usage(usage_info.usage.input_tokens, usage_info.usage.output_tokens)
+
+            if not tool_uses:
+                return
+
+            # Execute tools
+            tool_result_blocks: list[dict[str, Any]] = []
+            for tu in tool_uses:
+                self._cli.print_tool_use(tu.name, tu.input)
+                result_text, is_error = await self._execute_tool(tu.name, tu.input)
+                self._cli.print_tool_result(tu.name, result_text, is_error)
+                tool_result_blocks.append({
+                    "type": "tool_result",
+                    "tool_use_id": tu.id,
+                    "content": result_text,
+                    "is_error": is_error,
+                })
+
+            result_msg = Message(role="user", content=tool_result_blocks)
+            result_msg.token_count = count_message_tokens(result_msg.to_dict())
+            self._conversation.append(result_msg)
+
+    async def _execute_tool(self, name: str, input_data: dict) -> tuple[str, bool]:
+        if self._tool_executor is None:
+            return f"Tool '{name}' not available (no tools registered).", True
+        try:
+            result = await self._tool_executor.execute(name, input_data)
+            return result, False
+        except Exception as e:
+            return f"Error executing {name}: {e}", True
+
+    async def _build_system_prompt(self) -> str:
+        parts = [SYSTEM_PROMPT]
+
+        # Memory context
+        if self._memory_manager:
+            try:
+                memory_context = await self._memory_manager.load_context()
+                if memory_context:
+                    parts.append(f"\n# Memory\n{memory_context}")
+            except Exception:
+                pass
+
+        # Active skill instructions
+        active_skills = [s for s in self._skills if s.active]
+        if active_skills:
+            parts.append("\n# Active Skills")
+            for skill in active_skills:
+                if skill.instructions:
+                    parts.append(f"\n## {skill.name}\n{skill.instructions}")
+
+        return "\n".join(parts)
+
+    def _get_tool_definitions(self) -> list[dict[str, Any]]:
+        if self._tool_registry is None:
+            return []
+        return self._tool_registry.all_definitions()
+
+    def _save_history(self) -> None:
+        if self._history and self._conversation.messages:
+            self._history.save(self._session_id, self._conversation.messages)
