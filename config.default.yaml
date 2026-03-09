@@ -16,7 +16,7 @@ openai:
     scope: ""
 
 reasoning:
-  enabled: false
+  enabled: true
   budget_tokens: 10000        # Anthropic: max tokens for thinking (must be >= 1024)
   effort: medium              # OpenAI: low, medium, high (for o1/o3 models)
   show_thinking: true        # Display thinking output in the terminal
@@ -32,7 +32,7 @@ memory:
   daily_dir: memory/daily/
 
 embedding:
-  enabled: false
+  enabled: true
   model: all-MiniLM-L6-v2
   db_path: .agent/embeddings.db
   hybrid_alpha: 0.7
