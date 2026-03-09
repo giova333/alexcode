@@ -28,7 +28,7 @@ compaction:
 
 memory:
   enabled: true
-  memory_file: MEMORY.md
+  memory_file: memory/MEMORY.md
   daily_dir: memory/daily/
   context_days: 2                # days of daily notes in system prompt
   index_on_startup: true         # index memory + recent history at startup

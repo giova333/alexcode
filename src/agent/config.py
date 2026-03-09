@@ -66,7 +66,7 @@ class CompactionConfig:
 @dataclass
 class MemoryConfig:
     enabled: bool = True
-    memory_file: str = "MEMORY.md"
+    memory_file: str = "memory/MEMORY.md"
     daily_dir: str = "memory/daily/"
     context_days: int = 2          # days of daily notes to include in system prompt
     index_on_startup: bool = True  # index memory + recent history on startup

@@ -68,8 +68,7 @@ class Compactor:
 
         extracted = await self._call_llm_simple(extract_messages)
         if extracted:
-            await self._memory.flush(extracted)
-            await self._memory.append_daily(f"Compaction extracted:\n{extracted}")
+            await self._memory.save_daily(f"Compaction extracted:\n{extracted}")
 
     async def _summarize_old_messages(self) -> None:
         """Keep recent messages, summarize older ones."""
