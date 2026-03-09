@@ -39,6 +39,26 @@ class DailyMemory:
             return path.read_text()
         return ""
 
+    def read_date(self, dt: date) -> str:
+        """Read a specific date's daily file."""
+        path = self._daily_dir / f"{dt.isoformat()}.md"
+        if path.exists():
+            return path.read_text()
+        return ""
+
+    def read_recent(self, days: int = 2) -> list[tuple[date, str]]:
+        """Read the last N days of daily files (today included)."""
+        from datetime import timedelta
+
+        results = []
+        today = date.today()
+        for i in range(days):
+            dt = today - timedelta(days=i)
+            content = self.read_date(dt)
+            if content:
+                results.append((dt, content))
+        return results
+
     def list_dates(self) -> list[str]:
         """List available daily file dates."""
         if not self._daily_dir.exists():

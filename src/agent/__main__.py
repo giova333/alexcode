@@ -41,9 +41,19 @@ async def _async_main(args: argparse.Namespace) -> None:
     cli = CLI()
     llm = _create_llm_provider(config)
 
+    # Memory (initialize early so tools can reference it)
+    memory_manager = None
+    if config.memory.enabled:
+        memory_manager = MemoryManager(
+            config.memory,
+            project_dir,
+            embedding_config=config.embedding if config.embedding.enabled else None,
+            history_dir=config.history.dir,
+        )
+
     # Tools
     tool_registry = ToolRegistry()
-    register_builtins(tool_registry, config)
+    register_builtins(tool_registry, config, memory_manager=memory_manager)
     tool_executor = ToolExecutor(tool_registry)
 
     # MCP servers
@@ -54,10 +64,14 @@ async def _async_main(args: argparse.Namespace) -> None:
         if connected:
             cli.print_info(f"Connected: {', '.join(connected)}")
 
-    # Memory
-    memory_manager = None
-    if config.memory.enabled:
-        memory_manager = MemoryManager(config.memory, project_dir)
+    # Index memory + recent history on startup
+    if memory_manager and config.memory.index_on_startup:
+        try:
+            indexed = memory_manager.index_all()
+            if indexed:
+                cli.print_info(f"Indexed {indexed} memory chunks.")
+        except Exception as e:
+            cli.print_info(f"Memory indexing skipped: {e}")
 
     # History
     history = HistoryStorage(config.history.dir, project_dir)

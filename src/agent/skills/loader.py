@@ -1,8 +1,9 @@
 """Discover and load skills from SKILL.md files following Anthropic convention.
 
-Discovery locations (in precedence order):
-  1. Personal:  ~/.config/agent/skills/<name>/SKILL.md
+Discovery locations (higher precedence wins — first-seen name is kept):
+  1. Project config dirs (e.g., skills/)
   2. Project:   .agent/skills/<name>/SKILL.md
+  3. Personal:  ~/.config/agent/skills/<name>/SKILL.md
 
 Each skill directory contains a SKILL.md with YAML frontmatter + markdown body.
 Only metadata (name + description) is loaded at startup (~100 tokens per skill).

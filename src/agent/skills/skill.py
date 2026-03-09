@@ -33,7 +33,7 @@ class Skill:
 
     # Internal fields
     skill_dir: Path | None = None   # directory containing SKILL.md
-    _body: str | None = None        # lazily loaded SKILL.md body (below frontmatter)
+    _body: str | None = field(default=None, init=False, repr=False, compare=False)
 
     def load_body(self) -> str:
         """Load the full SKILL.md body (instructions below frontmatter).
@@ -70,12 +70,13 @@ class Skill:
         # Argument substitution
         if arguments:
             args_list = arguments.split()
-            body = body.replace("$ARGUMENTS", arguments)
-            for i, arg in enumerate(args_list):
-                body = body.replace(f"$ARGUMENTS[{i}]", arg)
-                body = body.replace(f"${i}", arg)
-        elif "$ARGUMENTS" not in body and arguments:
-            body += f"\nARGUMENTS: {arguments}"
+            if "$ARGUMENTS" in body:
+                body = body.replace("$ARGUMENTS", arguments)
+                for i, arg in enumerate(args_list):
+                    body = body.replace(f"$ARGUMENTS[{i}]", arg)
+                    body = body.replace(f"${i}", arg)
+            else:
+                body += f"\nARGUMENTS: {arguments}"
 
         # Dynamic context: !`command` preprocessing
         body = _resolve_dynamic_context(body)

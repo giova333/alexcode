@@ -69,6 +69,8 @@ class MemoryConfig:
     memory_file: str = "MEMORY.md"
     memory_dir: str = "memory/"
     daily_dir: str = "memory/daily/"
+    context_days: int = 2          # days of daily notes to include in system prompt
+    index_on_startup: bool = True  # index memory + recent history on startup
 
 
 @dataclass

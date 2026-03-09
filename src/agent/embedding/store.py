@@ -1,4 +1,4 @@
-"""SQLite storage for text chunks and embeddings."""
+"""SQLite storage for text chunks and embeddings with content-hash dedup."""
 
 from __future__ import annotations
 
@@ -37,6 +37,30 @@ class EmbeddingStore:
             )
         """)
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_source ON chunks(source)")
+
+        # Track content hashes per source to skip unchanged files
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS source_hashes (
+                source TEXT PRIMARY KEY,
+                content_hash TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        self._conn.commit()
+
+    def get_source_hash(self, source: str) -> str | None:
+        """Get the stored content hash for a source, or None if not indexed."""
+        row = self._conn.execute(
+            "SELECT content_hash FROM source_hashes WHERE source = ?", (source,)
+        ).fetchone()
+        return row[0] if row else None
+
+    def set_source_hash(self, source: str, content_hash: str, updated_at: str) -> None:
+        """Store or update the content hash for a source."""
+        self._conn.execute(
+            "INSERT OR REPLACE INTO source_hashes (source, content_hash, updated_at) VALUES (?, ?, ?)",
+            (source, content_hash, updated_at),
+        )
         self._conn.commit()
 
     def insert(self, source: str, chunk_text: str, embedding: list[float], updated_at: str) -> int:
@@ -65,6 +89,7 @@ class EmbeddingStore:
 
     def delete_by_source(self, source: str) -> int:
         cursor = self._conn.execute("DELETE FROM chunks WHERE source = ?", (source,))
+        self._conn.execute("DELETE FROM source_hashes WHERE source = ?", (source,))
         self._conn.commit()
         return cursor.rowcount
 

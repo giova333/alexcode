@@ -1,7 +1,8 @@
-"""Index text chunks into embeddings + BM25."""
+"""Index text chunks into embeddings + BM25, with content-hash dedup."""
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,7 @@ from agent.embedding.store import EmbeddingStore
 
 
 class EmbeddingIndexer:
-    """Chunks text, generates embeddings, and stores them."""
+    """Chunks text, generates embeddings, and stores them. Skips unchanged content."""
 
     def __init__(self, config: EmbeddingConfig, base_dir: Path) -> None:
         self._config = config
@@ -30,9 +31,24 @@ class EmbeddingIndexer:
                 )
         return self._model
 
-    def index_text(self, source: str, text: str) -> int:
-        """Chunk text and index embeddings. Returns number of chunks created."""
-        # Delete existing chunks for this source
+    @staticmethod
+    def _content_hash(text: str) -> str:
+        return hashlib.sha256(text.encode()).hexdigest()
+
+    def index_text(self, source: str, text: str, force: bool = False) -> int:
+        """Chunk text and index embeddings. Skips if content unchanged.
+
+        Returns number of chunks created (0 if skipped).
+        """
+        content_hash = self._content_hash(text)
+
+        # Skip if content hasn't changed
+        if not force:
+            stored_hash = self._store.get_source_hash(source)
+            if stored_hash == content_hash:
+                return 0
+
+        # Content changed — re-index
         self._store.delete_by_source(source)
 
         chunks = self._chunk_text(text)
@@ -45,6 +61,7 @@ class EmbeddingIndexer:
 
         items = [(source, chunk, emb, now) for chunk, emb in zip(chunks, embeddings)]
         self._store.insert_batch(items)
+        self._store.set_source_hash(source, content_hash, now)
         return len(chunks)
 
     def index_file(self, file_path: Path) -> int:

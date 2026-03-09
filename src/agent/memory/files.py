@@ -2,7 +2,16 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
+
+
+def _safe_topic_name(topic: str) -> str:
+    """Sanitize topic name to prevent path traversal."""
+    safe = re.sub(r"[^\w\-]", "_", topic)
+    if not safe:
+        raise ValueError(f"Invalid topic name: {topic!r}")
+    return safe
 
 
 class MemoryFiles:
@@ -32,7 +41,7 @@ class MemoryFiles:
 
     def read_topic(self, topic: str) -> str:
         """Read a topic file."""
-        path = self._topics_dir / f"{topic}.md"
+        path = self._topics_dir / f"{_safe_topic_name(topic)}.md"
         if path.exists():
             return path.read_text()
         return ""
@@ -40,13 +49,13 @@ class MemoryFiles:
     def write_topic(self, topic: str, content: str) -> None:
         """Write a topic file."""
         self._topics_dir.mkdir(parents=True, exist_ok=True)
-        path = self._topics_dir / f"{topic}.md"
+        path = self._topics_dir / f"{_safe_topic_name(topic)}.md"
         path.write_text(content)
 
     def append_topic(self, topic: str, content: str) -> None:
         """Append to a topic file."""
         self._topics_dir.mkdir(parents=True, exist_ok=True)
-        path = self._topics_dir / f"{topic}.md"
+        path = self._topics_dir / f"{_safe_topic_name(topic)}.md"
         existing = path.read_text() if path.exists() else ""
         separator = "\n\n" if existing and not existing.endswith("\n\n") else "\n" if existing else ""
         path.write_text(existing + separator + content)
