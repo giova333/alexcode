@@ -160,7 +160,7 @@ class MemoryManager:
         return total
 
     def _index_history(self) -> int:
-        """Index recent conversation history from session JSON files."""
+        """Index recent conversation history from session JSONL (and legacy JSON) files."""
         if not self._ensure_search():
             return 0
 
@@ -174,12 +174,45 @@ class MemoryManager:
         cutoff = datetime.now() - timedelta(days=2)
         total = 0
 
+        # Index JSONL files (current format)
+        for path in sorted(history_dir.glob("*.jsonl"), key=lambda f: f.stat().st_mtime, reverse=True):
+            try:
+                mtime = datetime.fromtimestamp(path.stat().st_mtime)
+                if mtime < cutoff:
+                    continue
+                text_parts = []
+                with path.open("r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            obj = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if obj.get("type") != "message":
+                            continue
+                        role = obj.get("role", "")
+                        content = obj.get("content", "")
+                        if isinstance(content, str):
+                            text_parts.append(f"[{role}]: {content}")
+                        elif isinstance(content, list):
+                            for block in content:
+                                if isinstance(block, dict) and block.get("type") == "text":
+                                    text_parts.append(f"[{role}]: {block['text']}")
+                if text_parts:
+                    session_text = "\n\n".join(text_parts)
+                    source = f"history/{path.stem}"
+                    total += self._indexer.index_text(source, session_text)
+            except Exception:
+                continue
+
+        # Legacy: index any remaining .json files
         for path in sorted(history_dir.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True):
             try:
                 mtime = datetime.fromtimestamp(path.stat().st_mtime)
                 if mtime < cutoff:
                     continue
-
                 data = json.loads(path.read_text())
                 text_parts = []
                 for msg in data.get("messages", []):
@@ -191,7 +224,6 @@ class MemoryManager:
                         for block in content:
                             if isinstance(block, dict) and block.get("type") == "text":
                                 text_parts.append(f"[{role}]: {block['text']}")
-
                 if text_parts:
                     session_text = "\n\n".join(text_parts)
                     source = f"history/{path.stem}"
