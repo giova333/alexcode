@@ -31,8 +31,9 @@ class MCPManager:
             try:
                 await self._connect_one(config)
                 connected.append(name)
-            except Exception as e:
-                # Log but don't fail — other servers may still work
+            except BaseException as e:
+                # Catch BaseException to handle CancelledError and ExceptionGroups
+                # from async MCP transports. Log but don't fail — other servers may still work.
                 print(f"Warning: Failed to connect MCP server '{name}': {e}")
         return connected
 
