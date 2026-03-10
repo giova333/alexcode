@@ -16,7 +16,7 @@ AgentLoop (core/loop.py)
     |         |
     |         +---> Compactor: flush facts to memory + summarize old messages
     |
-    +---> Build system prompt (SYSTEM.md + memory context + skill metadata)
+    +---> Build system prompt (SYSTEM.md + AGENTS.md + memory context + skill metadata)
     |
     +---> Stream LLM response (Anthropic or OpenAI)
     |         |
@@ -30,7 +30,7 @@ AgentLoop (core/loop.py)
 
 ### Initialization Flow (`__main__.py`)
 
-1. Parse CLI args (`--provider`, `--model`)
+1. Parse CLI args (`--provider`, `--model`, `--resume`)
 2. Load config: `config.default.yaml` -> project `config.yaml` -> user `~/.config/agent/config.yaml`
 3. Override with CLI args
 4. Create LLM provider (Anthropic or OpenAI)
@@ -41,7 +41,8 @@ AgentLoop (core/loop.py)
 9. Index memory + history (if `index_on_startup: true`)
 10. Discover skills
 11. Create `AgentLoop` with all components
-12. Run loop
+12. Resume session if `--resume` flag provided
+13. Run loop
 
 ---
 
@@ -98,10 +99,13 @@ src/agent/
 prompts/
     SYSTEM.md               # Base system prompt
 
-memory/
-    MEMORY.md               # Main long-term knowledge
-    daily/                  # Daily notes (YYYY-MM-DD.md)
+.agent/
+    mcp.json                # MCP server config (Claude Code format)
+    memory/
+        MEMORY.md           # Main long-term knowledge
+        daily/              # Daily notes (YYYY-MM-DD.md)
 
+AGENTS.md                   # Project-level agent instructions (loaded into system prompt)
 config.default.yaml         # Bundled defaults
 ```
 
@@ -114,7 +118,8 @@ config.default.yaml         # Bundled defaults
 1. `config.default.yaml` (bundled defaults)
 2. `./config.yaml` (project-level override)
 3. `~/.config/agent/config.yaml` (user-level override)
-4. CLI args (`--provider`, `--model`)
+4. `.agent/mcp.json` (Claude Code format MCP servers, merged with YAML `mcp_servers`)
+5. CLI args (`--provider`, `--model`, `--resume`)
 
 Configs are deep-merged: nested keys from higher-precedence files override lower ones. Environment variables are interpolated via `${VAR_NAME}` syntax (recursive, empty string fallback).
 
@@ -144,8 +149,8 @@ Config
         keep_recent_messages: int = 10
     memory: MemoryConfig
         enabled: bool = True
-        memory_file: str = "memory/MEMORY.md"
-        daily_dir: str = "memory/daily/"
+        memory_file: str = ".agent/memory/MEMORY.md"
+        daily_dir: str = ".agent/memory/daily/"
         context_days: int = 2
         index_on_startup: bool = True
     embedding: EmbeddingConfig
@@ -168,7 +173,7 @@ Config
 
 ```yaml
 provider: anthropic
-model: claude-sonnet-4-20250514
+model: claude-sonnet-4-6
 max_tokens: 8192
 prompts_dir: prompts/
 
@@ -197,8 +202,8 @@ compaction:
 
 memory:
   enabled: true
-  memory_file: memory/MEMORY.md
-  daily_dir: memory/daily/
+  memory_file: .agent/memory/MEMORY.md
+  daily_dir: .agent/memory/daily/
   context_days: 2
   index_on_startup: true
 
@@ -311,7 +316,7 @@ Message(
 
 The core loop that drives agentic behavior:
 
-1. Build system prompt: `SYSTEM.md` + memory context + skill metadata
+1. Build system prompt: `SYSTEM.md` + `AGENTS.md` + memory context + skill metadata
 2. Get tool definitions from registry
 3. Stream LLM response
 4. Collect text blocks and tool use events
@@ -335,7 +340,10 @@ There is no iteration limit — the LLM cycle continues until the model produces
 | `/tokens` | Show total token count |
 | `/tools` | List registered tools |
 | `/sessions` | List saved conversations |
+| `/resume [id]` | Resume a previous session |
 | `/compact` | Manually trigger compaction |
+| `/model [name]` | Switch model (aliases: `opus`, `sonnet`, `haiku`, etc.) |
+| `/prompt` | Display current system prompt |
 | `/skills` | List available skills |
 | `/help` | Show help text |
 | `/<skill> [args]` | Invoke skill |
@@ -344,6 +352,8 @@ There is no iteration limit — the LLM cycle continues until the model produces
 
 ```
 [SYSTEM.md content]
+
+[AGENTS.md content (if present)]
 
 # Memory
 [MEMORY.md content]
@@ -422,6 +432,7 @@ def register_builtins(registry, config, cli, memory_manager=None):
   - Execution: delegates to `session.call_tool()`
   - Extracts text content from MCP result
 - Environment variables in server config are interpolated at connection time
+- Also supports `.agent/mcp.json` (Claude Code format) with `mcpServers` key, auto-converted to internal format
 
 ---
 
@@ -430,7 +441,7 @@ def register_builtins(registry, config, cli, memory_manager=None):
 ### Two-Tier Design
 
 ```
-memory/
+.agent/memory/
     MEMORY.md               # Stable, long-term knowledge
     daily/
         2026-03-09.md       # Temporal, session-level notes
@@ -579,11 +590,11 @@ Current branch: !`git branch --show-current`
 | `argument-hint` | `""` | Shown in `/help` |
 | `allowed-tools` | all | Comma-separated tool names |
 
-### Discovery Locations (first-seen wins)
+### Discovery Locations (first match wins)
 
-1. Config dirs: `skills/`
+1. Custom dirs: paths listed in `skills.dirs` config (e.g., `skills/`)
 2. Project: `.agent/skills/<name>/SKILL.md`
-3. User: `~/.config/agent/skills/<name>/SKILL.md`
+3. Personal: `~/.config/agent/skills/<name>/SKILL.md`
 
 ### Rendering (`skill.py`)
 
@@ -629,10 +640,13 @@ Conversation(
 
 ### History Persistence (`history/storage.py`)
 
-- Sessions saved as JSON to `.agent/history/`
-- Filename: `<timestamp>_<uuid>.json`
-- Contains messages + metadata (model, provider, timestamp)
+- Sessions saved as JSONL (append-only) to `.agent/history/`
+- Filename: `<session_id>.jsonl` (session ID format: `YYYYMMDD_HHMMSS_randomhex`)
+- Line 1: header with `session_id`, `timestamp`, `metadata` (model, provider)
+- Subsequent lines: individual messages (`role`, `content`, `token_count`)
+- Backward compatible: falls back to legacy `.json` format if `.jsonl` not found
 - `list_sessions()` returns newest-first with message counts
+- `find_session()` / `get_latest_session_id()` for session resume
 - After save, conversation text is indexed for embedding search
 
 ---

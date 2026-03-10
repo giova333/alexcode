@@ -44,7 +44,7 @@ Environment variables are interpolated via `${VAR_NAME}` syntax.
 
 ```yaml
 provider: anthropic
-model: claude-sonnet-4-20250514
+model: claude-sonnet-4-6
 ```
 
 ### OpenAI with API key
@@ -81,6 +81,9 @@ python -m agent
 
 # Override provider and model via CLI flags
 python -m agent --provider openai --model gpt-4o
+
+# Resume a previous session
+python -m agent --resume [session-id]
 ```
 
 Type your message and press **Enter** to send. Use `\` at the end of a line for multiline input.
@@ -96,7 +99,10 @@ Type your message and press **Enter** to send. Use `\` at the end of a line for 
 | `/tokens` | Show total token usage |
 | `/tools` | List available tools |
 | `/sessions` | List saved conversation sessions |
+| `/resume [id]` | Resume a previous conversation session |
 | `/compact` | Manually trigger conversation compaction |
+| `/model [name]` | Switch LLM model (supports aliases: `opus`, `sonnet`, `haiku`) |
+| `/prompt` | Display the current system prompt |
 | `/skills` | List all available skills |
 | `/<skill-name> [args]` | Invoke a skill (e.g., `/review-pr 123`) |
 
@@ -112,19 +118,20 @@ The agent has access to these tools (called automatically by the LLM):
 | `edit` | Find-and-replace text in files |
 | `glob` | Find files by glob pattern |
 | `grep` | Search file contents (uses ripgrep if available) |
+| `ask_user` | Prompt the user for input during execution |
+| `memory_search` | Hybrid semantic + keyword search across memory and history |
+| `memory_save` | Save content to daily notes or main memory |
+| `memory_read` | Read main memory, daily notes, or list available dates |
 
 ## Memory
 
-When `memory.enabled: true` (default), the agent loads `MEMORY.md` from the project root into its system prompt. This lets you persist project context across sessions.
+When `memory.enabled: true` (default), the agent loads `MEMORY.md` into its system prompt. This lets you persist project context across sessions.
 
 ### File layout
 
 ```
-MEMORY.md                  # Main memory (loaded into every prompt)
-memory/
-├── topics/
-│   ├── architecture.md    # Topic-specific notes
-│   └── decisions.md
+.agent/memory/
+├── MEMORY.md              # Main memory (loaded into every prompt)
 └── daily/
     └── 2026-03-09.md      # Auto-generated daily notes
 ```
@@ -149,7 +156,7 @@ compaction:
 
 ## Conversation History
 
-All conversations are saved as JSON in `.agent/history/`. View past sessions with `/sessions`.
+All conversations are saved as JSONL (append-only) in `.agent/history/`. View past sessions with `/sessions`, or resume a previous session with `/resume [id]`.
 
 ## Embedding Search (Optional)
 
@@ -174,6 +181,8 @@ Uses a hybrid of cosine similarity (sentence-transformers) and BM25 keyword sear
 
 Connect to [Model Context Protocol](https://modelcontextprotocol.io/) servers to add external tools.
 
+### Via `config.yaml`
+
 ```yaml
 mcp_servers:
   - name: filesystem
@@ -189,7 +198,21 @@ mcp_servers:
       GITHUB_TOKEN: "${GITHUB_TOKEN}"
 ```
 
-MCP tools are registered on startup and appear as `mcp__<server>__<tool>` (e.g., `mcp__github__search_repositories`).
+### Via `.agent/mcp.json` (Claude Code format)
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/user/projects"]
+    }
+  }
+}
+```
+
+Both formats are supported and merged (`.agent/mcp.json` takes precedence). MCP tools are registered on startup and appear as `mcp__<server>__<tool>` (e.g., `mcp__github__search_repositories`).
 
 ## Skills
 
@@ -198,8 +221,8 @@ Skills follow the [Anthropic Agent Skills](https://agentskills.io) convention. E
 ### Discovery Locations
 
 Skills are discovered from (higher precedence wins):
-1. **Project:** `.agent/skills/<name>/SKILL.md`
-2. **Custom dirs:** paths listed in `skills.dirs` config
+1. **Custom dirs:** paths listed in `skills.dirs` config (e.g., `skills/`)
+2. **Project:** `.agent/skills/<name>/SKILL.md`
 3. **Personal:** `~/.config/agent/skills/<name>/SKILL.md`
 
 ### Example: `.agent/skills/review-pr/SKILL.md`
@@ -265,8 +288,8 @@ src/agent/
 │   ├── builtin/          # bash, read, write, edit, glob, grep
 │   └── mcp/              # MCP client + tool adapter
 ├── skills/               # Skill loader
-├── memory/               # MEMORY.md, topic files, daily notes
+├── memory/               # MEMORY.md, daily notes
 ├── embedding/            # SQLite store, indexer, hybrid search
 ├── compaction/           # Token-based compaction
-└── history/              # JSON conversation persistence
+└── history/              # JSONL conversation persistence
 ```
