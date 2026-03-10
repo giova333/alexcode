@@ -78,8 +78,20 @@ class Compactor:
         if len(messages) <= keep:
             return
 
-        old_messages = messages[:-keep]
-        recent_messages = messages[-keep:]
+        split = len(messages) - keep
+
+        # Adjust split point so we don't separate tool_use/tool_result pairs.
+        # If the first recent message has tool_result blocks, its preceding
+        # assistant message (with tool_use) was split into old_messages,
+        # causing an orphaned tool_result. Move split back to keep the pair.
+        while split > 0 and self._has_tool_result(messages[split]):
+            split -= 1
+
+        if split <= 0:
+            return
+
+        old_messages = messages[:split]
+        recent_messages = messages[split:]
 
         conversation_text = self._format_conversation(old_messages)
         summarize_messages = [{"role": "user", "content": f"{SUMMARIZE_PROMPT}\n\n{conversation_text}"}]
@@ -105,6 +117,11 @@ class Compactor:
             if isinstance(event, TextDelta):
                 parts.append(event.text)
         return "".join(parts)
+
+    @staticmethod
+    def _has_tool_result(message: Message) -> bool:
+        """Check if a message contains tool_result blocks."""
+        return any(block.get("type") == "tool_result" for block in message.content)
 
     def _format_conversation(self, messages: list[Message]) -> str:
         """Format messages into readable text for summarization."""

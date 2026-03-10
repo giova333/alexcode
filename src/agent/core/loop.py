@@ -110,10 +110,25 @@ class AgentLoop:
 
             # Handle built-in commands and skill invocations
             if user_input.startswith("/"):
-                if await self._handle_command(user_input):
+                try:
+                    if await self._handle_command(user_input):
+                        continue
+                except KeyboardInterrupt:
+                    self._cli.print_info("Interrupted.")
+                    continue
+                except Exception as e:
+                    logger.exception("Error handling command")
+                    self._cli.print_error(f"Error: {e}")
                     continue
 
-            await self._process_message(user_input)
+            try:
+                await self._process_message(user_input)
+            except KeyboardInterrupt:
+                self._cli.print_info("Interrupted.")
+            except Exception as e:
+                logger.exception("Error processing message")
+                self._cli.print_error(f"Error: {e}")
+                self._save_history()
 
     async def _handle_command(self, command: str) -> bool:
         """Handle slash commands. Returns True if handled."""
@@ -180,6 +195,8 @@ class AgentLoop:
             compacted = await self._compactor.maybe_compact()
             if compacted:
                 self._cli.print_compaction_notice()
+                if self._history:
+                    self._history.rewrite(self._session_id, self._conversation.messages)
                 self._cli.print_info(f"Compacted. Tokens: {self._conversation.total_tokens:,}")
             else:
                 self._cli.print_info(f"No compaction needed. Tokens: {self._conversation.total_tokens:,}")
@@ -285,6 +302,9 @@ class AgentLoop:
         # Check compaction before calling LLM
         if await self._compactor.maybe_compact():
             self._cli.print_compaction_notice()
+            # Rewrite history file since conversation was replaced with summary
+            if self._history:
+                self._history.rewrite(self._session_id, self._conversation.messages)
 
         await self._run_llm_cycle()
         self._save_history()
@@ -361,12 +381,18 @@ class AgentLoop:
             if not tool_uses:
                 return
 
-            # Execute tools
+            # Execute tools — always produce a tool_result for every tool_use
+            # to keep the conversation valid for the Anthropic API.
             tool_result_blocks: list[dict[str, Any]] = []
             for tu in tool_uses:
-                self._cli.print_tool_use(tu.name, tu.input)
-                result_text, is_error = await self._execute_tool(tu.name, tu.input)
-                self._cli.print_tool_result(tu.name, result_text, is_error)
+                try:
+                    self._cli.print_tool_use(tu.name, tu.input)
+                    result_text, is_error = await self._execute_tool(tu.name, tu.input)
+                    self._cli.print_tool_result(tu.name, result_text, is_error)
+                except Exception as e:
+                    result_text = f"Internal error during tool execution: {e}"
+                    is_error = True
+                    self._cli.print_tool_result(tu.name, result_text, is_error)
                 tool_result_blocks.append({
                     "type": "tool_result",
                     "tool_use_id": tu.id,

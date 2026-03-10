@@ -75,6 +75,30 @@ class HistoryStorage:
 
         return path
 
+    def rewrite(self, session_id: str, messages: list[Message], metadata: dict[str, Any] | None = None) -> Path:
+        """Rewrite a session file from scratch (e.g. after compaction).
+
+        Unlike save(), this replaces the entire file instead of appending.
+        """
+        path = self._dir / f"{session_id}.jsonl"
+        header = {
+            "type": "header",
+            "session_id": session_id,
+            "timestamp": datetime.now().isoformat(),
+            "metadata": metadata or {},
+        }
+        with path.open("w", encoding="utf-8") as f:
+            f.write(json.dumps(header, ensure_ascii=False) + "\n")
+            for msg in messages:
+                record = {
+                    "type": "message",
+                    "role": msg.role,
+                    "content": msg.content,
+                    "token_count": msg.token_count,
+                }
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        return path
+
     def load(self, session_id: str) -> list[Message] | None:
         """Load a conversation from a JSONL file."""
         path = self._dir / f"{session_id}.jsonl"
