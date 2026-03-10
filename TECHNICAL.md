@@ -548,8 +548,11 @@ Before each user message, checks if `conversation.total_tokens > threshold_token
 2. LLM call with summarization prompt:
    > Summarize: tasks performed, decisions and rationale, files modified, unresolved items
 3. Replace old messages with a single summary message
-4. Recalculate `total_tokens`
-5. Recent messages preserved intact
+4. Truncate oversized tool results in recent messages (>800 tokens → ~3000 char preview)
+5. Recalculate `total_tokens`
+6. Recent messages preserved intact
+
+The tool result truncation (step 4) prevents large tool responses (e.g., Glean searches, file reads at 30k+ tokens each) from consuming the entire post-compaction context window. The assistant's text responses — which already contain the processed/summarized findings — remain untouched.
 
 Both LLM calls use `_call_llm_simple()` — no tools, no extended thinking, max 2048 tokens. Failures are handled gracefully: if extraction fails, only summarization runs; if summarization fails, a placeholder is inserted.
 

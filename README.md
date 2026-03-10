@@ -145,6 +145,7 @@ When token usage exceeds the threshold (default: 80,000), the agent automaticall
 1. Asks the LLM to extract key facts and decisions
 2. Writes them to `MEMORY.md` and today's daily file
 3. Summarizes older messages, keeping the last 10 intact
+4. Truncates oversized tool results (>800 tokens) in preserved messages to prevent them from dominating the context window
 
 Configure in `config.yaml`:
 
