@@ -9,6 +9,7 @@ from typing import Any
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from mcp.client.streamable_http import streamablehttp_client
 
 from agent.tools.mcp.adapter import MCPToolAdapter
 from agent.tools.registry import ToolRegistry
@@ -41,6 +42,8 @@ class MCPManager:
 
         if transport == "stdio":
             session = await self._connect_stdio(config)
+        elif transport in ("http", "streamable-http"):
+            session = await self._connect_http(config)
         else:
             raise ValueError(f"Unsupported MCP transport: {transport}")
 
@@ -72,6 +75,29 @@ class MCPManager:
 
         read_stream, write_stream = await self._exit_stack.enter_async_context(
             stdio_client(params)
+        )
+        session = await self._exit_stack.enter_async_context(
+            ClientSession(read_stream, write_stream)
+        )
+        await session.initialize()
+        return session
+
+    async def _connect_http(self, config: dict[str, Any]) -> ClientSession:
+        url = config["url"]
+        headers = config.get("headers", {})
+
+        # Interpolate env vars in headers
+        resolved_headers = {}
+        for k, v in headers.items():
+            if isinstance(v, str):
+                resolved_headers[k] = re.sub(
+                    r"\$\{(\w+)}", lambda m: os.environ.get(m.group(1), ""), v,
+                )
+            else:
+                resolved_headers[k] = v
+
+        read_stream, write_stream, _ = await self._exit_stack.enter_async_context(
+            streamablehttp_client(url, headers=resolved_headers if resolved_headers else None)
         )
         session = await self._exit_stack.enter_async_context(
             ClientSession(read_stream, write_stream)

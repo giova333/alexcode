@@ -425,7 +425,7 @@ def register_builtins(registry, config, cli, memory_manager=None):
 
 ### MCP Tools (`tools/mcp/`)
 
-- `MCPManager` connects to configured MCP servers via stdio transport
+- `MCPManager` connects to configured MCP servers via stdio or streamable HTTP transport
 - On connection, discovers available tools from each server
 - `MCPToolAdapter` wraps each MCP tool as an internal `Tool`:
   - Name: `mcp__<server>__<tool_name>`

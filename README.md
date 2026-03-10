@@ -207,12 +207,16 @@ mcp_servers:
       "type": "stdio",
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/user/projects"]
+    },
+    "glean": {
+      "type": "http",
+      "url": "https://your-company.glean.com/mcp/default"
     }
   }
 }
 ```
 
-Both formats are supported and merged (`.agent/mcp.json` takes precedence). MCP tools are registered on startup and appear as `mcp__<server>__<tool>` (e.g., `mcp__github__search_repositories`).
+Supported transports: `stdio`, `http` (streamable HTTP). Both config formats are supported and merged (`.agent/mcp.json` takes precedence). MCP tools are registered on startup and appear as `mcp__<server>__<tool>` (e.g., `mcp__github__search_repositories`).
 
 ## Skills
 
