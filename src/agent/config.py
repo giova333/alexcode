@@ -7,6 +7,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import json
+
 import yaml
 
 
@@ -66,8 +68,8 @@ class CompactionConfig:
 @dataclass
 class MemoryConfig:
     enabled: bool = True
-    memory_file: str = "memory/MEMORY.md"
-    daily_dir: str = "memory/daily/"
+    memory_file: str = ".agent/memory/MEMORY.md"
+    daily_dir: str = ".agent/memory/daily/"
     context_days: int = 2          # days of daily notes to include in system prompt
     index_on_startup: bool = True  # index memory + recent history on startup
 
@@ -102,7 +104,6 @@ class Config:
     provider: str = "anthropic"
     model: str = "claude-sonnet-4-6"
     max_tokens: int = 8192
-    prompts_dir: str = "prompts/"
     anthropic: AnthropicConfig = field(default_factory=AnthropicConfig)
     openai: OpenAIConfig = field(default_factory=OpenAIConfig)
     reasoning: ReasoningConfig = field(default_factory=ReasoningConfig)
@@ -135,10 +136,55 @@ class Config:
         if user_cfg.exists():
             _deep_merge(merged, _load_yaml(user_cfg))
 
-        # 4. Interpolate env vars
+        # 4. Load MCP servers from .agent/mcp.json (Claude Code format)
+        #    mcp.json entries override YAML entries with the same name
+        if project_dir:
+            mcp_json_servers = _load_mcp_json(project_dir / ".agent" / "mcp.json")
+            if mcp_json_servers:
+                existing = merged.get("mcp_servers", []) or []
+                json_names = {s["name"] for s in mcp_json_servers}
+                # Keep YAML entries whose name is NOT in mcp.json
+                deduped = [s for s in existing if s.get("name") not in json_names]
+                deduped.extend(mcp_json_servers)
+                merged["mcp_servers"] = deduped
+
+        # 5. Interpolate env vars
         merged = _interpolate_recursive(merged)
 
         return _dict_to_config(merged)
+
+
+def _load_mcp_json(path: Path) -> list[dict]:
+    """Load MCP servers from a Claude Code-style mcp.json file.
+
+    Converts the Claude Code format:
+        {"mcpServers": {"name": {"type": "stdio", "command": "...", ...}}}
+    to the internal list format:
+        [{"name": "name", "transport": "stdio", "command": "...", ...}]
+    """
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return []
+
+    mcp_servers = data.get("mcpServers", {})
+    if not isinstance(mcp_servers, dict):
+        return []
+
+    result = []
+    for name, server_config in mcp_servers.items():
+        if not isinstance(server_config, dict):
+            continue
+        entry = {"name": name}
+        # Map "type" to "transport" (Claude Code uses "type")
+        entry["transport"] = server_config.get("type", server_config.get("transport", "stdio"))
+        for key in ("command", "args", "env", "url", "headers"):
+            if key in server_config:
+                entry[key] = server_config[key]
+        result.append(entry)
+    return result
 
 
 def _load_yaml(path: Path) -> dict:
@@ -180,7 +226,6 @@ def _dict_to_config(data: dict) -> Config:
         provider=data.get("provider", "anthropic"),
         model=data.get("model", "claude-sonnet-4-20250514"),
         max_tokens=data.get("max_tokens", 8192),
-        prompts_dir=data.get("prompts_dir", "prompts/"),
         anthropic=anthropic_cfg,
         openai=openai_cfg,
         reasoning=ReasoningConfig(**data.get("reasoning", {})),

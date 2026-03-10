@@ -26,3 +26,8 @@ class Conversation:
     def clear(self) -> None:
         self.messages.clear()
         self.total_tokens = 0
+
+    def load_messages(self, messages: list[Message]) -> None:
+        """Replace current messages with loaded ones, recalculating token count."""
+        self.messages = list(messages)
+        self.total_tokens = sum(m.token_count for m in self.messages)

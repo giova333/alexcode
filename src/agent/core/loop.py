@@ -36,18 +36,13 @@ MODEL_ALIASES: dict[str, str] = {
     "opus-4": "claude-opus-4-20250514",
 }
 
-FALLBACK_SYSTEM_PROMPT = """\
-You are an AI coding agent. You help users with software engineering tasks.
-Be concise and direct. Prefer action over explanation.
-"""
+_PROMPTS_DIR = Path(__file__).parent.parent.parent.parent / "prompts"
 
 
-def _load_prompt(prompts_dir: Path, name: str) -> str:
-    """Load a prompt template from a .md file, or return empty string."""
-    path = prompts_dir / f"{name}.md"
-    if path.exists():
-        return path.read_text().strip()
-    return ""
+def _load_system_prompt() -> str:
+    """Load the bundled SYSTEM.md prompt. Always required."""
+    path = _PROMPTS_DIR / "SYSTEM.md"
+    return path.read_text().strip()
 
 
 class AgentLoop:
@@ -69,7 +64,7 @@ class AgentLoop:
         self._config = config
         self._llm = llm
         self._cli = cli
-        self._prompts_dir = project_dir / config.prompts_dir
+        self._project_dir = project_dir
         self._conversation = Conversation()
         self._tool_registry = tool_registry
         self._tool_executor = tool_executor
@@ -84,6 +79,17 @@ class AgentLoop:
             memory_manager,
             self._conversation,
         )
+
+    def resume_session(self, session_id: str) -> bool:
+        """Load a previous session into the conversation. Returns True on success."""
+        if not self._history:
+            return False
+        messages = self._history.load(session_id)
+        if not messages:
+            return False
+        self._conversation.load_messages(messages)
+        self._session_id = session_id
+        return True
 
     async def run(self) -> None:
         """Main loop: read input, get response, repeat."""
@@ -145,6 +151,30 @@ class AgentLoop:
                         f"  {s['session_id']} ({s['message_count']} messages) — {s['timestamp']}"
                     )
             return True
+        elif cmd == "/resume":
+            if not self._history:
+                self._cli.print_error("History storage not configured.")
+                return True
+            if arg:
+                session_id = self._history.find_session(arg)
+            else:
+                session_id = self._history.get_latest_session_id()
+            if not session_id:
+                self._cli.print_error("Session not found." if arg else "No previous sessions.")
+                return True
+            # Save current session before switching
+            self._save_history()
+            if self.resume_session(session_id):
+                msg_count = len(self._conversation.messages)
+                self._cli.print_info(f"Resumed session: {session_id} ({msg_count} messages, {self._conversation.total_tokens:,} tokens)")
+                # Show last few messages as context
+                recent = [m for m in self._conversation.messages if m.text][-3:]
+                for m in recent:
+                    preview = m.text[:120] + "..." if len(m.text) > 120 else m.text
+                    self._cli.print_info(f"  [{m.role}] {preview}")
+            else:
+                self._cli.print_error(f"Failed to load session: {session_id}")
+            return True
         elif cmd == "/compact":
             compacted = await self._compactor.maybe_compact()
             if compacted:
@@ -185,7 +215,7 @@ class AgentLoop:
             self._cli.print_assistant_text(f"```\n{system}\n```")
             return True
         elif cmd == "/help":
-            self._cli.print_info("Commands: /exit /clear /history /tokens /tools /sessions /compact /skills /model /prompt /help")
+            self._cli.print_info("Commands: /exit /clear /history /tokens /tools /sessions /resume [id] /compact /skills /model /prompt /help")
             invocable = [s for s in self._skills if s.user_invocable]
             if invocable:
                 self._cli.print_info(f"Skills: {', '.join('/' + s.name for s in invocable)}")
@@ -322,9 +352,27 @@ class AgentLoop:
         except Exception as e:
             return f"Error executing {name}: {e}", True
 
+    def _load_agents_md(self) -> str:
+        """Load AGENTS.md from .agent/AGENTS.md and project root (both merged)."""
+        parts = []
+        for candidate in [
+            self._project_dir / ".agent" / "AGENTS.md",
+            self._project_dir / "AGENTS.md",
+        ]:
+            if candidate.exists():
+                content = candidate.read_text().strip()
+                if content:
+                    parts.append(content)
+        return "\n\n".join(parts)
+
     async def _build_system_prompt(self) -> str:
-        system = _load_prompt(self._prompts_dir, "SYSTEM") or FALLBACK_SYSTEM_PROMPT
+        system = _load_system_prompt()
         parts = [system]
+
+        # AGENTS.md instructions
+        agents_md = self._load_agents_md()
+        if agents_md:
+            parts.append(f"\n# Project Instructions (AGENTS.md)\n{agents_md}")
 
         # Memory context
         if self._memory_manager:

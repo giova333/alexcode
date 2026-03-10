@@ -1,7 +1,6 @@
 provider: anthropic
 model: claude-sonnet-4-6
 max_tokens: 8192
-prompts_dir: prompts/
 
 anthropic:
   api_key: "${ANTHROPIC_API_KEY}"
@@ -28,8 +27,8 @@ compaction:
 
 memory:
   enabled: true
-  memory_file: memory/MEMORY.md
-  daily_dir: memory/daily/
+  memory_file: .agent/memory/MEMORY.md
+  daily_dir: .agent/memory/daily/
   context_days: 2                # days of daily notes in system prompt
   index_on_startup: true         # index memory + recent history at startup
 
@@ -48,11 +47,7 @@ skills:
   dirs:
     - skills/
 
-mcp_servers:
-  - name: playwright
-    transport: stdio
-    command: npx
-    args: ["-y", "--registry", "https://registry.npmjs.org", "@playwright/mcp@latest"]
+mcp_servers: []
 
 tools:
   bash_timeout: 120

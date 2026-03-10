@@ -93,6 +93,18 @@ async def _async_main(args: argparse.Namespace) -> None:
         skills=skills,
     )
 
+    # Resume a previous session if requested
+    if args.resume:
+        if args.resume == "__latest__":
+            session_id = history.get_latest_session_id()
+        else:
+            session_id = history.find_session(args.resume)
+        if session_id and loop.resume_session(session_id):
+            msg_count = len(loop._conversation.messages)
+            cli.print_info(f"Resumed session: {session_id} ({msg_count} messages)")
+        else:
+            cli.print_error(f"Session not found: {args.resume}" if args.resume != "__latest__" else "No previous sessions.")
+
     try:
         await loop.run()
     except (KeyboardInterrupt, SystemExit):
@@ -105,6 +117,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="AI coding agent")
     parser.add_argument("--provider", choices=["anthropic", "openai"], default=None)
     parser.add_argument("--model", default=None)
+    parser.add_argument("--resume", nargs="?", const="__latest__", default=None,
+                        help="Resume a previous session (optionally provide session ID or prefix)")
     args = parser.parse_args()
 
     try:
