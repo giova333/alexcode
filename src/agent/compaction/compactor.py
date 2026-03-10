@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from agent.config import CompactionConfig
 from agent.core.conversation import Conversation
 from agent.core.message import Message
-from agent.core.tokens import count_message_tokens
+from agent.core.tokens import count_message_tokens, count_tokens
 from agent.llm.base import LLMProvider, TextDelta
 from agent.memory.manager import MemoryManager
+
+# Maximum tokens allowed for a single tool_result content block after compaction.
+# Larger results get truncated to a preview to keep the context window manageable.
+_MAX_TOOL_RESULT_TOKENS = 800
 
 
 EXTRACT_PROMPT = """\
@@ -103,6 +108,10 @@ class Compactor:
         summary_msg = Message.user(f"[Previous conversation summary]\n{summary}")
         summary_msg.token_count = count_message_tokens(summary_msg.to_dict())
 
+        # Truncate oversized tool results in recent messages so they don't
+        # dominate the context window after compaction.
+        recent_messages = [self._truncate_tool_results(m) for m in recent_messages]
+
         self._conversation.messages = [summary_msg] + recent_messages
         self._conversation.total_tokens = sum(m.token_count for m in self._conversation.messages)
 
@@ -122,6 +131,44 @@ class Compactor:
     def _has_tool_result(message: Message) -> bool:
         """Check if a message contains tool_result blocks."""
         return any(block.get("type") == "tool_result" for block in message.content)
+
+    @staticmethod
+    def _truncate_tool_results(message: Message) -> Message:
+        """Shrink oversized tool_result content blocks in a message.
+
+        After compaction, large tool results (e.g. Glean search responses,
+        file reads) can consume most of the remaining context.  This replaces
+        tool_result content that exceeds *_MAX_TOOL_RESULT_TOKENS* with a
+        truncated preview, keeping the conversation within budget.
+        """
+        if message.role != "user":
+            return message
+
+        changed = False
+        new_content: list[dict[str, Any]] = []
+        for block in message.content:
+            if block.get("type") == "tool_result":
+                raw = block.get("content", "")
+                content_str = raw if isinstance(raw, str) else json.dumps(raw)
+                tokens = count_tokens(content_str)
+                if tokens > _MAX_TOOL_RESULT_TOKENS:
+                    # Keep a useful preview: first ~2000 chars typically ≈ 500-700 tokens
+                    truncated = content_str[:3000]
+                    new_block = dict(block)
+                    new_block["content"] = f"{truncated}\n\n... [truncated from {tokens} tokens during compaction]"
+                    new_content.append(new_block)
+                    changed = True
+                else:
+                    new_content.append(block)
+            else:
+                new_content.append(block)
+
+        if not changed:
+            return message
+
+        new_msg = Message(role=message.role, content=new_content)
+        new_msg.token_count = count_message_tokens(new_msg.to_dict())
+        return new_msg
 
     def _format_conversation(self, messages: list[Message]) -> str:
         """Format messages into readable text for summarization."""
