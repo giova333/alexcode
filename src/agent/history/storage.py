@@ -142,6 +142,29 @@ class HistoryStorage:
             messages.append(msg)
         return messages
 
+    def clear_session(self, session_id: str) -> None:
+        """Reset a session file to header-only (no messages)."""
+        path = self._dir / f"{session_id}.jsonl"
+        if not path.exists():
+            return
+        # Read header, rewrite file with header only
+        header = None
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                    if obj.get("type") == "header":
+                        header = obj
+                        break
+                except json.JSONDecodeError:
+                    continue
+        if header:
+            with path.open("w", encoding="utf-8") as f:
+                f.write(json.dumps(header, ensure_ascii=False) + "\n")
+
     def find_session(self, query: str) -> str | None:
         """Find a session ID by exact or prefix match. Returns full ID or None."""
         # Exact match (prefer .jsonl, fallback to .json)
