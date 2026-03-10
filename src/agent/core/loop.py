@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -241,8 +242,42 @@ class AgentLoop:
         # The rendered skill prompt becomes the user message
         await self._process_message(rendered)
 
+    def _expand_file_references(self, text: str) -> str:
+        """Expand @path references by inlining file contents."""
+        pattern = re.compile(r"(?:^|(?<=\s))@(\S+)")
+        matches = list(pattern.finditer(text))
+        if not matches:
+            return text
+
+        attachments: list[str] = []
+        for match in matches:
+            ref = match.group(1)
+            path = self._project_dir / ref
+            try:
+                if path.is_file():
+                    content = path.read_text(errors="replace")
+                    # Limit to ~50KB to avoid token explosion
+                    if len(content) > 50_000:
+                        content = content[:50_000] + "\n... (truncated)"
+                    attachments.append(f"<file path=\"{ref}\">\n{content}\n</file>")
+                elif path.is_dir():
+                    entries = sorted(path.iterdir())
+                    listing = "\n".join(
+                        f"  {'[dir] ' if e.is_dir() else ''}{e.name}"
+                        for e in entries
+                        if not e.name.startswith(".")
+                    )
+                    attachments.append(f"<directory path=\"{ref}\">\n{listing}\n</directory>")
+            except (OSError, PermissionError):
+                continue
+
+        if attachments:
+            return text + "\n\n" + "\n\n".join(attachments)
+        return text
+
     async def _process_message(self, user_input: str) -> None:
         """Process a user message through the full LLM cycle."""
+        user_input = self._expand_file_references(user_input)
         user_msg = Message.user(user_input)
         user_msg.token_count = count_message_tokens(user_msg.to_dict())
         self._conversation.append(user_msg)

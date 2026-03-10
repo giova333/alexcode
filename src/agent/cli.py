@@ -10,24 +10,34 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 
+from agent.completer import AgentCompleter
+
 
 class CLI:
     """Handles all terminal input/output."""
 
-    def __init__(self) -> None:
+    def __init__(self, working_dir: Path | None = None) -> None:
         self.console = Console()
         history_path = Path.home() / ".config" / "agent" / "input_history"
         history_path.parent.mkdir(parents=True, exist_ok=True)
+        self._completer = AgentCompleter(working_dir=working_dir)
         self._session: PromptSession[str] = PromptSession(
             history=FileHistory(str(history_path)),
+            completer=self._completer,
+            complete_while_typing=True,
         )
+
+    def set_skills(self, skills: list[tuple[str, str]]) -> None:
+        """Update available skill commands for autocompletion."""
+        self._completer.set_skills(skills)
 
     def print_welcome(self, provider: str, model: str) -> None:
         self.console.print(
             Panel(
                 f"[bold]AI Agent[/bold] — {provider}/{model}\n"
                 "Type your message and press Enter. Use \\\\ for multiline.\n"
-                "Commands: /exit, /clear, /history, /model",
+                "Commands: /exit, /clear, /history, /model\n"
+                "Use @ for file references, / for commands. Tab to select.",
                 border_style="blue",
             )
         )

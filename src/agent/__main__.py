@@ -38,7 +38,7 @@ async def _async_main(args: argparse.Namespace) -> None:
     if args.model:
         config.model = args.model
 
-    cli = CLI()
+    cli = CLI(working_dir=project_dir)
     llm = _create_llm_provider(config)
 
     # Memory (initialize early so tools can reference it)
@@ -79,6 +79,10 @@ async def _async_main(args: argparse.Namespace) -> None:
     # Skills
     skill_loader = SkillLoader(config.skills.dirs, project_dir)
     skills = skill_loader.load_all()
+
+    # Register skills for autocompletion
+    invocable = [(s.name, s.description or s.name) for s in skills if s.user_invocable]
+    cli.set_skills(invocable)
 
     loop = AgentLoop(
         config=config,
