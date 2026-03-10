@@ -7,11 +7,21 @@ import re
 from contextlib import AsyncExitStack
 from typing import Any
 
+import httpx
 from mcp import ClientSession, StdioServerParameters
+from mcp.client.auth.oauth2 import OAuthClientProvider
 from mcp.client.stdio import stdio_client
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
+from mcp.shared.auth import OAuthClientMetadata
+from pydantic import AnyUrl
 
 from agent.tools.mcp.adapter import MCPToolAdapter
+from agent.tools.mcp.oauth import (
+    CALLBACK_PORT,
+    FileTokenStorage,
+    open_browser_redirect,
+    wait_for_callback,
+)
 from agent.tools.registry import ToolRegistry
 
 
@@ -85,6 +95,7 @@ class MCPManager:
 
     async def _connect_http(self, config: dict[str, Any]) -> ClientSession:
         url = config["url"]
+        name = config.get("name", "unknown")
         headers = config.get("headers", {})
 
         # Interpolate env vars in headers
@@ -97,8 +108,30 @@ class MCPManager:
             else:
                 resolved_headers[k] = v
 
+        # Set up OAuth for browser-based authentication
+        redirect_uri = f"http://127.0.0.1:{CALLBACK_PORT}/callback"
+        storage = FileTokenStorage(name)
+        oauth_auth = OAuthClientProvider(
+            server_url=url,
+            client_metadata=OAuthClientMetadata(
+                client_name=f"agent-{name}",
+                redirect_uris=[AnyUrl(redirect_uri)],
+                grant_types=["authorization_code", "refresh_token"],
+                response_types=["code"],
+                token_endpoint_auth_method="client_secret_basic",
+            ),
+            storage=storage,
+            redirect_handler=open_browser_redirect,
+            callback_handler=wait_for_callback,
+        )
+
+        http_client = httpx.AsyncClient(
+            headers=resolved_headers if resolved_headers else None,
+            auth=oauth_auth,
+        )
+
         read_stream, write_stream, _ = await self._exit_stack.enter_async_context(
-            streamablehttp_client(url, headers=resolved_headers if resolved_headers else None)
+            streamable_http_client(url, http_client=http_client)
         )
         session = await self._exit_stack.enter_async_context(
             ClientSession(read_stream, write_stream)
