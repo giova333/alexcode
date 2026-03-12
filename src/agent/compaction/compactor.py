@@ -53,9 +53,9 @@ class Compactor:
         self._memory = memory_manager
         self._conversation = conversation
 
-    async def maybe_compact(self) -> bool:
+    async def maybe_compact(self, force: bool = False) -> bool:
         """Check threshold and compact if needed. Returns True if compacted."""
-        if self._conversation.total_tokens < self._config.threshold_tokens:
+        if not force and self._conversation.total_tokens < self._config.threshold_tokens:
             return False
 
         await self._flush_to_memory()

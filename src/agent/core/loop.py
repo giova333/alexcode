@@ -193,7 +193,7 @@ class AgentLoop:
                 self._cli.print_error(f"Failed to load session: {session_id}")
             return True
         elif cmd == "/compact":
-            compacted = await self._compactor.maybe_compact()
+            compacted = await self._compactor.maybe_compact(force=True)
             if compacted:
                 self._cli.print_compaction_notice()
                 if self._history:
