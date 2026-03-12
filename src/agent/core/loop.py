@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -428,6 +429,9 @@ class AgentLoop:
 
     async def _build_system_prompt(self) -> str:
         system = _load_system_prompt()
+        # Inject dynamic context into placeholders
+        system = system.replace("{{CWD}}", str(Path.cwd()))
+        system = system.replace("{{LOCAL_TIME}}", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         parts = [system]
 
         # AGENTS.md instructions
