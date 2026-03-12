@@ -104,12 +104,21 @@ class AnthropicProvider:
                 elif event.type == "message_stop":
                     pass
 
-            # Get final message for usage
+            # Get final message for usage and thinking blocks (with signatures)
             final = await stream.get_final_message()
+            thinking_blocks = []
+            for block in final.content:
+                if block.type == "thinking":
+                    thinking_blocks.append({
+                        "type": "thinking",
+                        "thinking": block.thinking,
+                        "signature": block.signature,
+                    })
             yield ResponseComplete(
                 usage=UsageInfo(
                     input_tokens=final.usage.input_tokens,
                     output_tokens=final.usage.output_tokens,
                 ),
                 stop_reason=final.stop_reason or "",
+                thinking_blocks=thinking_blocks,
             )

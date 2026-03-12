@@ -40,6 +40,7 @@ class ResponseComplete:
     """Signals end of response with usage info."""
     usage: UsageInfo = field(default_factory=UsageInfo)
     stop_reason: str = ""
+    thinking_blocks: list[dict[str, Any]] = field(default_factory=list)
 
 
 # Union of all stream events

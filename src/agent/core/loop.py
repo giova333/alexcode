@@ -359,6 +359,8 @@ class AgentLoop:
 
             # Build assistant message
             content_blocks: list[dict[str, Any]] = []
+            if usage_info and usage_info.thinking_blocks:
+                content_blocks.extend(usage_info.thinking_blocks)
             full_text = "".join(text_parts)
             if full_text:
                 content_blocks.append({"type": "text", "text": full_text})
