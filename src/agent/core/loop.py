@@ -374,8 +374,7 @@ class AgentLoop:
 
             if content_blocks:
                 assistant_msg = Message(role="assistant", content=content_blocks)
-                if usage_info:
-                    assistant_msg.token_count = usage_info.usage.input_tokens + usage_info.usage.output_tokens
+                assistant_msg.token_count = count_message_tokens(assistant_msg.to_dict())
                 self._conversation.append(assistant_msg)
 
             if usage_info:
