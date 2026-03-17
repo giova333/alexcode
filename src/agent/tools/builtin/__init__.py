@@ -11,6 +11,7 @@ from agent.tools.builtin.edit import EditTool
 from agent.tools.builtin.glob_tool import GlobTool
 from agent.tools.builtin.grep import GrepTool
 from agent.tools.builtin.read import ReadTool
+from agent.tools.builtin.update_plan import UpdatePlanTool
 from agent.tools.builtin.write import WriteTool
 from agent.tools.registry import ToolRegistry
 
@@ -20,7 +21,7 @@ def register_builtins(
     config: Config,
     cli: CLI,
     memory_manager: MemoryManager | None = None,
-) -> None:
+) -> UpdatePlanTool:
     registry.register(BashTool(timeout=config.tools.bash_timeout))
     registry.register(ReadTool())
     registry.register(WriteTool())
@@ -28,6 +29,9 @@ def register_builtins(
     registry.register(GlobTool())
     registry.register(GrepTool())
     registry.register(AskUserTool(cli))
+
+    update_plan_tool = UpdatePlanTool()
+    registry.register(update_plan_tool)
 
     # Memory tools (only if memory is enabled)
     if memory_manager is not None:
@@ -39,3 +43,5 @@ def register_builtins(
         registry.register(MemorySearchTool(memory_manager))
         registry.register(MemorySaveTool(memory_manager))
         registry.register(MemoryReadTool(memory_manager))
+
+    return update_plan_tool

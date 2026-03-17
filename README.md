@@ -103,6 +103,7 @@ Type your message and press **Enter** to send. Use `\` at the end of a line for 
 | `/compact` | Manually trigger conversation compaction |
 | `/model [name]` | Switch LLM model (supports aliases: `opus`, `sonnet`, `haiku`) |
 | `/prompt` | Display the current system prompt |
+| `/plan` | Toggle plan mode (read-only exploration + structured planning) |
 | `/skills` | List all available skills |
 | `/<skill-name> [args]` | Invoke a skill (e.g., `/review-pr 123`) |
 
@@ -122,6 +123,7 @@ The agent has access to these tools (called automatically by the LLM):
 | `memory_search` | Hybrid semantic + keyword search across memory and history |
 | `memory_save` | Save content to daily notes or main memory |
 | `memory_read` | Read main memory, daily notes, or list available dates |
+| `update_plan` | Update the session plan (plan mode + execution) |
 
 ## Memory
 
@@ -137,6 +139,37 @@ When `memory.enabled: true` (default), the agent loads `MEMORY.md` into its syst
 ```
 
 Create `MEMORY.md` manually or let the compaction system generate it.
+
+## Plan Mode
+
+Use `/plan` to enter a structured planning mode where the LLM can only read the codebase and write to a plan file — no code modifications allowed.
+
+### How It Works
+
+1. Type `/plan` to enter plan mode (prompt changes to `[plan] >>> `)
+2. The LLM explores the codebase using read-only tools (`read`, `glob`, `grep`)
+3. It builds a structured plan using the `update_plan` tool
+4. Type `/plan` again to exit — the plan stays in the system prompt as an implementation guide
+5. The LLM implements the plan step by step, marking steps as completed
+
+### Plan Format
+
+Plans are stored as JSON in `.agent/plans/<session_id>.json`:
+
+```json
+{
+  "explanation": "Adding JWT authentication middleware",
+  "plan": [
+    { "step": "Read the existing auth module", "status": "completed" },
+    { "step": "Add JWT verification middleware", "status": "in_progress" },
+    { "step": "Write integration tests", "status": "pending" }
+  ]
+}
+```
+
+### Session Binding
+
+Each plan is bound to its session. Different sessions can have independent plans. When you resume a session with `/resume`, its plan is automatically loaded. Plans persist across `/clear` and `/compact` within the same session.
 
 ## Conversation Compaction
 
@@ -290,7 +323,7 @@ src/agent/
 │   ├── base.py           # Tool protocol
 │   ├── registry.py       # Tool registry
 │   ├── executor.py       # Tool dispatcher
-│   ├── builtin/          # bash, read, write, edit, glob, grep
+│   ├── builtin/          # bash, read, write, edit, glob, grep, update_plan
 │   └── mcp/              # MCP client + tool adapter
 ├── skills/               # Skill loader
 ├── memory/               # MEMORY.md, daily notes

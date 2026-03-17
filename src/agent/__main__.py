@@ -53,7 +53,7 @@ async def _async_main(args: argparse.Namespace) -> None:
 
     # Tools
     tool_registry = ToolRegistry()
-    register_builtins(tool_registry, config, cli, memory_manager=memory_manager)
+    update_plan_tool = register_builtins(tool_registry, config, cli, memory_manager=memory_manager)
     tool_executor = ToolExecutor(tool_registry)
 
     # MCP servers
@@ -95,6 +95,7 @@ async def _async_main(args: argparse.Namespace) -> None:
         history=history,
         skill_loader=skill_loader,
         skills=skills,
+        update_plan_tool=update_plan_tool,
     )
 
     # Resume a previous session if requested

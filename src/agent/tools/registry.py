@@ -33,5 +33,17 @@ class ToolRegistry:
             for tool in self._tools.values()
         ]
 
+    def definitions_for(self, names: set[str]) -> list[dict[str, Any]]:
+        """Generate tool definitions only for the given set of tool names."""
+        return [
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "input_schema": tool.input_schema,
+            }
+            for tool in self._tools.values()
+            if tool.name in names
+        ]
+
     def list_names(self) -> list[str]:
         return list(self._tools.keys())

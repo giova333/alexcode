@@ -16,7 +16,7 @@ AgentLoop (core/loop.py)
     |         |
     |         +---> Compactor: flush facts to memory + summarize old messages
     |
-    +---> Build system prompt (SYSTEM.md + AGENTS.md + memory context + skill metadata)
+    +---> Build system prompt (SYSTEM.md + AGENTS.md + memory context + skill metadata + active plan)
     |
     +---> Stream LLM response (Anthropic or OpenAI)
     |         |
@@ -77,6 +77,7 @@ src/agent/
             grep.py         # Content search (ripgrep/grep)
             ask_user.py     # Interactive user input
             memory_tool.py  # Memory search/save/read tools
+            update_plan.py  # Plan mode: update session plan
         mcp/
             adapter.py      # Wraps MCP tool as internal Tool
             client.py       # MCP server connection manager (stdio)
@@ -101,6 +102,7 @@ prompts/
 
 .agent/
     mcp.json                # MCP server config (Claude Code format)
+    plans/                  # Session plan files (<session_id>.json)
     memory/
         MEMORY.md           # Main long-term knowledge
         daily/              # Daily notes (YYYY-MM-DD.md)
@@ -316,8 +318,8 @@ Message(
 
 The core loop that drives agentic behavior:
 
-1. Build system prompt: `SYSTEM.md` + `AGENTS.md` + memory context + skill metadata
-2. Get tool definitions from registry
+1. Build system prompt: `SYSTEM.md` + `AGENTS.md` + memory context + skill metadata + active plan
+2. Get tool definitions from registry (filtered in plan mode)
 3. Stream LLM response
 4. Collect text blocks and tool use events
 5. Build assistant message from collected blocks
@@ -344,6 +346,7 @@ There is no iteration limit — the LLM cycle continues until the model produces
 | `/compact` | Manually trigger compaction |
 | `/model [name]` | Switch model (aliases: `opus`, `sonnet`, `haiku`, etc.) |
 | `/prompt` | Display current system prompt |
+| `/plan` | Toggle plan mode (read-only + structured planning) |
 | `/skills` | List available skills |
 | `/help` | Show help text |
 | `/<skill> [args]` | Invoke skill |
@@ -367,6 +370,9 @@ There is no iteration limit — the LLM cycle continues until the model produces
 # Available Skills
 - skill-name: Description for LLM discovery
 - another-skill: Another description
+
+# Plan Mode (ACTIVE) / Active Plan
+[Plan JSON with instructions — only if plan mode or incomplete plan exists]
 ```
 
 ---
@@ -389,6 +395,7 @@ class Tool(Protocol):
 - `ToolRegistry` — central dict mapping `name -> Tool`
   - `register(tool)`, `get(name)`, `unregister(name)`
   - `all_definitions()` — returns Anthropic API format list
+  - `definitions_for(names)` — returns definitions filtered to a set of names (used by plan mode)
 - `ToolExecutor(registry)` — lookup + execute pattern with error handling
 
 ### Built-in Tools
@@ -405,23 +412,9 @@ class Tool(Protocol):
 | `memory_search` | `query`, `top_k?` | Hybrid search across memory + history |
 | `memory_save` | `content`, `target?` | Save to `daily` (default) or `main` memory |
 | `memory_read` | `target`, `date?` | Read `main`, `daily`, or list `dates` |
+| `update_plan` | `explanation`, `plan` | Update session plan (array of `{step, status}`) |
 
-Registration happens in `tools/builtin/__init__.py`:
-
-```python
-def register_builtins(registry, config, cli, memory_manager=None):
-    registry.register(BashTool(timeout=config.tools.bash_timeout))
-    registry.register(ReadTool())
-    registry.register(WriteTool())
-    registry.register(EditTool())
-    registry.register(GlobTool())
-    registry.register(GrepTool())
-    registry.register(AskUserTool(cli))
-    if memory_manager:
-        registry.register(MemorySearchTool(memory_manager))
-        registry.register(MemorySaveTool(memory_manager))
-        registry.register(MemoryReadTool(memory_manager))
-```
+Registration happens in `tools/builtin/__init__.py`. `register_builtins()` returns the `UpdatePlanTool` instance so the agent loop can wire it to the session's plan file.
 
 ### MCP Tools (`tools/mcp/`)
 
@@ -621,6 +614,49 @@ Non-disabled skill metadata is injected into the system prompt so the LLM can su
 # Available Skills
 - review-pr: Reviews a pull request for bugs and style issues.
 - deploy: Deploys the application to staging.
+```
+
+---
+
+## Plan Mode
+
+Plan mode restricts the LLM to read-only tools and a structured `update_plan` tool, enabling an explore-then-implement workflow.
+
+### Architecture
+
+- **Session-bound**: Each plan is stored at `.agent/plans/<session_id>.json`, one plan per session
+- **Persistent**: The plan file on disk is the source of truth. `_build_system_prompt()` reads it fresh on every LLM call, so it survives compaction (which replaces conversation messages) and `/clear` (which resets conversation state)
+- **Auto-loaded**: When resuming a session via `/resume`, `_load_session_plan()` checks if an incomplete plan exists for that session and wires it up
+
+### Plan File Format
+
+```json
+{
+  "explanation": "High-level approach description",
+  "plan": [
+    { "step": "Step description", "status": "pending|in_progress|completed" }
+  ]
+}
+```
+
+### Two Modes of Plan Injection
+
+1. **In plan mode** (`_plan_mode = True`): System prompt includes planning instructions (read-only constraints, workflow guidance). Tool definitions filtered to `PLAN_MODE_TOOLS = {read, glob, grep, ask_user, memory_search, memory_read, update_plan}` plus any `mcp__*` tools. Safety net in `_execute_tool()` rejects blocked tools.
+
+2. **After plan mode** (plan file exists with incomplete steps): System prompt includes the plan as an implementation guide. All tools are available. The LLM uses `update_plan` to mark steps as `in_progress`/`completed` as it works.
+
+### `/plan` Command Flow
+
+- **Enter**: Creates `.agent/plans/<session_id>.json` (or reuses existing). Sets `_plan_mode = True`, changes CLI prompt to `[plan] >>> `, wires `UpdatePlanTool._plan_file`.
+- **Exit**: Sets `_plan_mode = False`, reverts prompt. Plan file and tool wiring are preserved for implementation phase.
+- **Re-enter**: Reopens the same session plan file — the LLM can rewrite it with a different plan.
+
+### Tool Filtering (`_get_tool_definitions`)
+
+```python
+if self._plan_mode:
+    allowed = {n for n in all_names if n in PLAN_MODE_TOOLS or n.startswith("mcp__")}
+    return self._tool_registry.definitions_for(allowed)
 ```
 
 ---

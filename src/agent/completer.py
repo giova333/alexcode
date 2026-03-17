@@ -23,6 +23,7 @@ BUILTIN_COMMANDS: dict[str, str] = {
     "/model": "Switch LLM model",
     "/prompt": "Show system prompt",
     "/help": "Show available commands",
+    "/plan": "Toggle plan mode",
 }
 
 
