@@ -174,7 +174,6 @@ class AgentLoop:
             self._conversation.clear()
             if self._history:
                 self._history.clear_session(self._session_id)
-                self._session_id = self._history.new_session_id()
             self._cli.print_info("Conversation cleared.")
             return True
         elif cmd == "/history":
