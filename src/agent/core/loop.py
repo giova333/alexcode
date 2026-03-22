@@ -435,6 +435,11 @@ class AgentLoop:
 
             if usage_info:
                 self._cli.print_usage(usage_info.usage.input_tokens, usage_info.usage.output_tokens)
+                # Sync total_tokens with the API's input_tokens which reflects
+                # the true context size (system prompt + tools + all messages).
+                # The local per-message estimates miss system/tool overhead, so
+                # compaction would never trigger without this correction.
+                self._conversation.total_tokens = usage_info.usage.input_tokens
 
             if not tool_uses:
                 return
