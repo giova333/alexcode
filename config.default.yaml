@@ -5,20 +5,9 @@ max_tokens: 8192
 anthropic:
   api_key: "${ANTHROPIC_API_KEY}"
 
-openai:
-  auth: api_key
-  api_key: "${OPENAI_API_KEY}"
-  base_url: null
-  oauth:
-    client_id: ""
-    client_secret: "${OPENAI_CLIENT_SECRET}"
-    token_url: ""
-    scope: ""
-
 reasoning:
   enabled: true
-  budget_tokens: 10000        # Anthropic: max tokens for thinking (must be >= 1024)
-  effort: medium              # OpenAI: low, medium, high (for o1/o3 models)
+  budget_tokens: 10000        # max tokens for thinking (must be >= 1024)
   show_thinking: true        # Display thinking output in the terminal
 
 compaction:

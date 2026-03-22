@@ -18,7 +18,7 @@ AgentLoop (core/loop.py)
     |
     +---> Build system prompt (SYSTEM.md + AGENTS.md + memory context + skill metadata + active plan)
     |
-    +---> Stream LLM response (Anthropic or OpenAI)
+    +---> Stream LLM response (Anthropic)
     |         |
     |         +---> TextDelta ---> Print to terminal
     |         +---> ThinkingDelta ---> Print if enabled
@@ -30,10 +30,10 @@ AgentLoop (core/loop.py)
 
 ### Initialization Flow (`__main__.py`)
 
-1. Parse CLI args (`--provider`, `--model`, `--resume`)
+1. Parse CLI args (`--model`, `--resume`)
 2. Load config: `config.default.yaml` -> project `config.yaml` -> user `~/.config/agent/config.yaml`
 3. Override with CLI args
-4. Create LLM provider (Anthropic or OpenAI)
+4. Create LLM provider (Anthropic)
 5. Initialize CLI (Rich console + prompt_toolkit)
 6. Create `MemoryManager` (if enabled)
 7. Create `ToolRegistry` + register built-in tools
@@ -62,7 +62,6 @@ src/agent/
     llm/
         base.py             # LLM provider protocol, stream event types
         anthropic.py        # Anthropic Claude provider (extended thinking)
-        openai.py           # OpenAI provider (API key + OAuth)
     tools/
         base.py             # Tool protocol + ToolError exception
         registry.py         # Dict-based tool registry
@@ -121,7 +120,7 @@ config.default.yaml         # Bundled defaults
 2. `./config.yaml` (project-level override)
 3. `~/.config/agent/config.yaml` (user-level override)
 4. `.agent/mcp.json` (Claude Code format MCP servers, merged with YAML `mcp_servers`)
-5. CLI args (`--provider`, `--model`, `--resume`)
+5. CLI args (`--model`, `--resume`)
 
 Configs are deep-merged: nested keys from higher-precedence files override lower ones. Environment variables are interpolated via `${VAR_NAME}` syntax (recursive, empty string fallback).
 
@@ -135,16 +134,9 @@ Config
     prompts_dir: str = "prompts/"
     anthropic: AnthropicConfig
         api_key: str = "${ANTHROPIC_API_KEY}"
-    openai: OpenAIConfig
-        auth: str = "api_key"           # or "oauth"
-        api_key: str = "${OPENAI_API_KEY}"
-        base_url: str | None = None     # custom endpoint (Azure)
-        oauth: OAuthConfig
-            client_id, client_secret, token_url, scope
     reasoning: ReasoningConfig
         enabled: bool = True
-        budget_tokens: int = 10000      # min 1024 for Anthropic
-        effort: str = "medium"          # low/medium/high (OpenAI)
+        budget_tokens: int = 10000      # min 1024
         show_thinking: bool = True
     compaction: CompactionConfig
         threshold_tokens: int = 80000
@@ -182,20 +174,9 @@ prompts_dir: prompts/
 anthropic:
   api_key: "${ANTHROPIC_API_KEY}"
 
-openai:
-  auth: api_key
-  api_key: "${OPENAI_API_KEY}"
-  base_url: null
-  oauth:
-    client_id: ""
-    client_secret: "${OPENAI_CLIENT_SECRET}"
-    token_url: ""
-    scope: ""
-
 reasoning:
   enabled: true
   budget_tokens: 10000
-  effort: medium
   show_thinking: true
 
 compaction:
@@ -236,7 +217,7 @@ tools:
 
 ### Provider Protocol (`llm/base.py`)
 
-Both providers implement a common streaming protocol:
+The provider implements a streaming protocol:
 
 ```python
 class LLMProvider(Protocol):
@@ -265,18 +246,6 @@ class LLMProvider(Protocol):
 - Events processed: `content_block_start`, `content_block_delta`, `content_block_stop`
 - Tool use: accumulates `input_json_delta` chunks, parses JSON on `content_block_stop`
 - Extended thinking: sends `thinking.type = "enabled"` with `budget_tokens` (min 1024). If `max_tokens <= budget`, auto-adjusts to `budget + max_tokens`
-
-### OpenAI Provider (`llm/openai.py`)
-
-- Client: `openai.AsyncOpenAI`
-- Auth: API key or OAuth2 client credentials flow (`OAuthTokenManager` with auto-refresh)
-- Format conversion: translates Anthropic-format messages and tools to OpenAI format internally
-  - Content blocks -> separate messages
-  - `tool_use` blocks -> assistant `tool_calls`
-  - `tool_result` blocks -> `tool` role messages
-  - Tool schemas: Anthropic `input_schema` -> OpenAI `function.parameters`
-- Reasoning: sends `reasoning_effort` (low/medium/high) for o1/o3 models
-- Tool calls accumulated across chunks, emitted on `finish_reason`
 
 ### Message Format (`core/message.py`)
 
@@ -711,8 +680,6 @@ Terminal interface built on Rich (rendering) and prompt_toolkit (input):
 | Package | Purpose |
 |---------|---------|
 | `anthropic>=0.45.0` | Anthropic Claude SDK |
-| `openai>=1.30.0` | OpenAI SDK |
-| `httpx>=0.27.0` | HTTP client (OAuth flows) |
 | `rich>=13.0` | Terminal rendering |
 | `prompt-toolkit>=3.0` | Input handling |
 | `mcp>=1.0` | Model Context Protocol client |
@@ -750,6 +717,6 @@ Install: `pip install ai-agent[embedding]`
 
 6. **Lazy skill loading** — only frontmatter is parsed at startup. Full skill bodies are loaded on invocation, keeping the initial system prompt small.
 
-7. **Anthropic message format internally** — all messages use Anthropic's content block format. The OpenAI provider translates to/from this format, keeping the core loop provider-agnostic.
+7. **Anthropic message format internally** — all messages use Anthropic's content block format, keeping the core loop clean and consistent.
 
 8. **Graceful degradation** — embedding search falls back to keyword search if sentence-transformers is unavailable. MCP connection failures don't block startup. Compaction LLM failures use placeholder summaries.

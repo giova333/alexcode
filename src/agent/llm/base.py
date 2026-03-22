@@ -48,7 +48,7 @@ StreamEvent = TextDelta | ThinkingDelta | ToolUseEvent | ResponseComplete
 
 
 class LLMProvider(Protocol):
-    """Protocol for LLM providers (Anthropic, OpenAI, etc.)."""
+    """Protocol for LLM providers."""
 
     async def stream(
         self,

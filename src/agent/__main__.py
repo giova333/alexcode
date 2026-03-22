@@ -20,12 +20,8 @@ from agent.tools.registry import ToolRegistry
 
 def _create_llm_provider(config: Config):
     """Instantiate the configured LLM provider."""
-    if config.provider == "openai":
-        from agent.llm.openai import OpenAIProvider
-        return OpenAIProvider(config.openai, config.model)
-    else:
-        from agent.llm.anthropic import AnthropicProvider
-        return AnthropicProvider(config.anthropic, config.model)
+    from agent.llm.anthropic import AnthropicProvider
+    return AnthropicProvider(config.anthropic, config.model)
 
 
 async def _async_main(args: argparse.Namespace) -> None:
@@ -33,8 +29,6 @@ async def _async_main(args: argparse.Namespace) -> None:
     config = Config.load(project_dir)
 
     # CLI overrides
-    if args.provider:
-        config.provider = args.provider
     if args.model:
         config.model = args.model
 
@@ -120,7 +114,6 @@ async def _async_main(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="AI coding agent")
-    parser.add_argument("--provider", choices=["anthropic", "openai"], default=None)
     parser.add_argument("--model", default=None)
     parser.add_argument("--resume", nargs="?", const="__latest__", default=None,
                         help="Resume a previous session (optionally provide session ID or prefix)")

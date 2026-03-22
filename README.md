@@ -1,6 +1,6 @@
 # AI Agent
 
-A CLI-based AI coding agent with tool use, memory, MCP support, and conversation compaction. Supports Anthropic Claude and OpenAI as LLM providers.
+A CLI-based AI coding agent with tool use, memory, MCP support, and conversation compaction.
 
 ## Quick Start
 
@@ -18,7 +18,7 @@ python -m agent
 ## Requirements
 
 - Python 3.13+
-- An API key for Anthropic or OpenAI
+- An Anthropic API key
 
 ## Installation
 
@@ -43,44 +43,17 @@ Environment variables are interpolated via `${VAR_NAME}` syntax.
 ### Minimal `config.yaml`
 
 ```yaml
-provider: anthropic
 model: claude-sonnet-4-6
-```
-
-### OpenAI with API key
-
-```yaml
-provider: openai
-model: gpt-4o
-
-openai:
-  api_key: "${OPENAI_API_KEY}"
-```
-
-### OpenAI with OAuth (Azure)
-
-```yaml
-provider: openai
-model: gpt-4o
-
-openai:
-  auth: oauth
-  base_url: "https://your-resource.openai.azure.com/openai/deployments/gpt-4o"
-  oauth:
-    client_id: "your-client-id"
-    client_secret: "${OPENAI_CLIENT_SECRET}"
-    token_url: "https://login.microsoftonline.com/your-tenant/oauth2/v2.0/token"
-    scope: "https://cognitiveservices.azure.com/.default"
 ```
 
 ## Usage
 
 ```bash
-# Default (Anthropic)
+# Run
 python -m agent
 
-# Override provider and model via CLI flags
-python -m agent --provider openai --model gpt-4o
+# Override model via CLI flag
+python -m agent --model claude-sonnet-4-6
 
 # Resume a previous session
 python -m agent --resume [session-id]
@@ -317,8 +290,7 @@ src/agent/
 │   └── tokens.py         # Token counting (tiktoken)
 ├── llm/
 │   ├── base.py           # LLMProvider protocol
-│   ├── anthropic.py      # Anthropic Claude provider
-│   └── openai.py         # OpenAI provider (API key + OAuth)
+│   └── anthropic.py      # Anthropic Claude provider
 ├── tools/
 │   ├── base.py           # Tool protocol
 │   ├── registry.py       # Tool registry
