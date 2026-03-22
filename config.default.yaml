@@ -7,7 +7,7 @@ anthropic:
 
 reasoning:
   enabled: true
-  budget_tokens: 10000        # max tokens for thinking (must be >= 1024)
+  effort: high               # low, medium, high (adaptive thinking)
   show_thinking: true        # Display thinking output in the terminal
 
 compaction:

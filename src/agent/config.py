@@ -38,7 +38,7 @@ class AnthropicConfig:
 @dataclass
 class ReasoningConfig:
     enabled: bool = False
-    budget_tokens: int = 10000
+    effort: str = "high"       # low, medium, high (adaptive thinking)
     show_thinking: bool = False
 
 

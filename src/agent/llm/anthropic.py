@@ -46,16 +46,11 @@ class AnthropicProvider:
         if tools:
             kwargs["tools"] = tools
 
-        # Extended thinking
+        # Adaptive thinking
         if reasoning and reasoning.enabled:
-            budget = max(1024, reasoning.budget_tokens)
-            kwargs["thinking"] = {
-                "type": "enabled",
-                "budget_tokens": budget,
-            }
-            # Anthropic requires max_tokens > budget_tokens when thinking is enabled
-            if max_tokens <= budget:
-                kwargs["max_tokens"] = budget + max_tokens
+            kwargs["thinking"] = {"type": "adaptive"}
+            effort = reasoning.effort if reasoning.effort in ("low", "medium", "high") else "high"
+            kwargs["output_config"] = {"effort": effort}
 
         async with self._client.messages.stream(**kwargs) as stream:
             current_block_type = ""
