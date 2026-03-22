@@ -60,6 +60,9 @@ class Compactor:
 
         await self._flush_to_memory()
         await self._summarize_old_messages()
+        # Always truncate oversized tool results, even when there are too few
+        # messages to summarize (e.g. a few messages with huge Glean results).
+        self._truncate_all_tool_results()
         return True
 
     async def _flush_to_memory(self) -> None:
@@ -108,12 +111,20 @@ class Compactor:
         summary_msg = Message.user(f"[Previous conversation summary]\n{summary}")
         summary_msg.token_count = count_message_tokens(summary_msg.to_dict())
 
-        # Truncate oversized tool results in recent messages so they don't
-        # dominate the context window after compaction.
-        recent_messages = [self._truncate_tool_results(m) for m in recent_messages]
-
         self._conversation.messages = [summary_msg] + recent_messages
         self._conversation.total_tokens = sum(m.token_count for m in self._conversation.messages)
+
+    def _truncate_all_tool_results(self) -> None:
+        """Truncate oversized tool results across all messages.
+
+        This handles the case where a small number of messages contain huge
+        tool results (e.g. Glean searches) that push the context over the
+        threshold, but there aren't enough messages to summarize away.
+        """
+        messages = self._conversation.messages
+        new_messages = [self._truncate_tool_results(m) for m in messages]
+        self._conversation.messages = new_messages
+        self._conversation.total_tokens = sum(m.token_count for m in new_messages)
 
     async def _call_llm_simple(self, messages: list[dict[str, Any]]) -> str:
         """Make a simple LLM call (no tools) and return text."""
