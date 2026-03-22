@@ -349,6 +349,13 @@ class AgentLoop:
             return text + "\n\n" + "\n\n".join(attachments)
         return text
 
+    async def _maybe_compact(self) -> None:
+        """Run compaction if threshold is exceeded, and persist the result."""
+        if await self._compactor.maybe_compact():
+            self._cli.print_compaction_notice()
+            if self._history:
+                self._history.rewrite(self._session_id, self._conversation.messages)
+
     async def _process_message(self, user_input: str) -> None:
         """Process a user message through the full LLM cycle."""
         user_input = self._expand_file_references(user_input)
@@ -356,12 +363,7 @@ class AgentLoop:
         user_msg.token_count = count_message_tokens(user_msg.to_dict())
         self._conversation.append(user_msg)
 
-        # Check compaction before calling LLM
-        if await self._compactor.maybe_compact():
-            self._cli.print_compaction_notice()
-            # Rewrite history file since conversation was replaced with summary
-            if self._history:
-                self._history.rewrite(self._session_id, self._conversation.messages)
+        await self._maybe_compact()
 
         await self._run_llm_cycle()
         self._save_history()
@@ -466,6 +468,9 @@ class AgentLoop:
             result_msg = Message(role="user", content=tool_result_blocks)
             result_msg.token_count = count_message_tokens(result_msg.to_dict())
             self._conversation.append(result_msg)
+
+            # Compact mid-cycle if tool results pushed us over the threshold
+            await self._maybe_compact()
 
     async def _execute_tool(self, name: str, input_data: dict) -> tuple[str, bool]:
         if self._plan_mode and name not in PLAN_MODE_TOOLS and not name.startswith("mcp__"):
