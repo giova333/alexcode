@@ -19,6 +19,12 @@ embedding = [
     "sentence-transformers>=3.0",
     "rank-bm25>=0.2",
 ]
+test = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pytest-mock>=3.12",
+    "pytest-timeout>=2.2",
+]
 
 [project.scripts]
 alexcode = "agent.__main__:main"
@@ -29,3 +35,12 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: Integration tests (may use filesystem, mock LLM APIs)",
+    "slow: Tests that take more than a few seconds",
+]
+asyncio_mode = "auto"
+timeout = 30
