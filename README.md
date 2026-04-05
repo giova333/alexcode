@@ -76,7 +76,6 @@ Type your message and press **Enter** to send. Use `\` at the end of a line for 
 | `/compact` | Manually trigger conversation compaction |
 | `/model [name]` | Switch LLM model (supports aliases: `opus`, `sonnet`, `haiku`) |
 | `/prompt` | Display the current system prompt |
-| `/plan` | Toggle plan mode (read-only exploration + structured planning) |
 | `/skills` | List all available skills |
 | `/<skill-name> [args]` | Invoke a skill (e.g., `/review-pr 123`) |
 
@@ -93,10 +92,13 @@ The agent has access to these tools (called automatically by the LLM):
 | `glob` | Find files by glob pattern |
 | `grep` | Search file contents (uses ripgrep if available) |
 | `ask_user` | Prompt the user for input during execution |
+| `web_fetch` | Fetch and extract content from URLs (HTML, JSON, text) |
+| `web_search` | Search the web (Brave Search API or DuckDuckGo fallback) |
+| `subagent` | Delegate tasks to independent sub-agents (sync or async) |
+| `plan` | Create structured implementation plans via read-only exploration |
 | `memory_search` | Hybrid semantic + keyword search across memory and history |
 | `memory_save` | Save content to daily notes or main memory |
 | `memory_read` | Read main memory, daily notes, or list available dates |
-| `update_plan` | Update the session plan (plan mode + execution) |
 
 ## Memory
 
@@ -115,29 +117,26 @@ Create `MEMORY.md` manually or let the compaction system generate it.
 
 ## Plan Mode
 
-Use `/plan` to enter a structured planning mode where the LLM can only read the codebase and write to a plan file — no code modifications allowed.
+The `plan` tool spawns a read-only sub-agent that explores the codebase and produces a structured implementation plan.
 
 ### How It Works
 
-1. Type `/plan` to enter plan mode (prompt changes to `[plan] >>> `)
-2. The LLM explores the codebase using read-only tools (`read`, `glob`, `grep`)
-3. It builds a structured plan using the `update_plan` tool
-4. Type `/plan` again to exit — the plan stays in the system prompt as an implementation guide
-5. The LLM implements the plan step by step, marking steps as completed
+1. The LLM calls the `plan` tool with a task description
+2. A sub-agent explores the codebase using read-only tools (`read`, `glob`, `grep`, `bash`, `web_fetch`, `web_search`)
+3. It writes a structured plan as markdown checkboxes to `.agent/plans/<session_id>.md`
+4. The plan is injected into the system prompt as an implementation guide
+5. The LLM works through the plan, using `edit` to check off completed steps
 
 ### Plan Format
 
-Plans are stored as JSON in `.agent/plans/<session_id>.json`:
+Plans are stored as markdown in `.agent/plans/<session_id>.md`:
 
-```json
-{
-  "explanation": "Adding JWT authentication middleware",
-  "plan": [
-    { "step": "Read the existing auth module", "status": "completed" },
-    { "step": "Add JWT verification middleware", "status": "in_progress" },
-    { "step": "Write integration tests", "status": "pending" }
-  ]
-}
+```markdown
+- [x] Read the existing auth module
+- [ ] Add JWT verification middleware
+  - [ ] Create middleware function
+  - [ ] Add token validation
+- [ ] Write integration tests
 ```
 
 ### Session Binding
@@ -295,11 +294,16 @@ src/agent/
 │   ├── base.py           # Tool protocol
 │   ├── registry.py       # Tool registry
 │   ├── executor.py       # Tool dispatcher
-│   ├── builtin/          # bash, read, write, edit, glob, grep, update_plan
+│   ├── builtin/          # bash, read, write, edit, glob, grep, plan, subagent, web_fetch, web_search
 │   └── mcp/              # MCP client + tool adapter
+├── subagent/             # Sub-agent runner for isolated task delegation
 ├── skills/               # Skill loader
 ├── memory/               # MEMORY.md, daily notes
 ├── embedding/            # SQLite store, indexer, hybrid search
 ├── compaction/           # Token-based compaction
 └── history/              # JSONL conversation persistence
+
+prompts/
+├── SYSTEM.md             # Base system prompt
+└── PLAN.md               # Plan mode system prompt
 ```

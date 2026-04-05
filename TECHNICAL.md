@@ -36,13 +36,15 @@ AgentLoop (core/loop.py)
 4. Create LLM provider (Anthropic)
 5. Initialize CLI (Rich console + prompt_toolkit)
 6. Create `MemoryManager` (if enabled)
-7. Create `ToolRegistry` + register built-in tools
-8. Connect MCP servers + register MCP tools
-9. Index memory + history (if `index_on_startup: true`)
-10. Discover skills
-11. Create `AgentLoop` with all components
-12. Resume session if `--resume` flag provided
-13. Run loop
+7. Create `ToolRegistry` + register built-in tools (including `web_fetch`, `web_search`)
+8. Register `SubagentTool` (after builtins, so clone captures all tools)
+9. Connect MCP servers + register MCP tools
+10. Register `PlanTool` (after MCP, so it can see MCP tools in parent registry)
+11. Index memory + history (if `index_on_startup: true`)
+12. Discover skills
+13. Create `AgentLoop` with all components
+14. Resume session if `--resume` flag provided
+15. Run loop
 
 ---
 
@@ -64,7 +66,7 @@ src/agent/
         anthropic.py        # Anthropic Claude provider (extended thinking)
     tools/
         base.py             # Tool protocol + ToolError exception
-        registry.py         # Dict-based tool registry
+        registry.py         # Dict-based tool registry (clone_excluding/clone_including)
         executor.py         # Tool dispatch (lookup + execute)
         builtin/
             __init__.py     # register_builtins()
@@ -75,11 +77,17 @@ src/agent/
             glob_tool.py    # File pattern matching
             grep.py         # Content search (ripgrep/grep)
             ask_user.py     # Interactive user input
+            web_fetch.py    # URL content fetching (HTML/JSON/text)
+            web_search.py   # Web search (Brave/DuckDuckGo)
+            subagent.py     # Sub-agent task delegation (sync/async)
+            plan.py         # Read-only planning via sub-agent
             memory_tool.py  # Memory search/save/read tools
-            update_plan.py  # Plan mode: update session plan
         mcp/
             adapter.py      # Wraps MCP tool as internal Tool
             client.py       # MCP server connection manager (stdio)
+    subagent/
+        __init__.py
+        runner.py           # Isolated LLM cycle for sub-agent execution
     memory/
         manager.py          # Memory orchestrator (load, save, search, index)
         files.py            # MEMORY.md file I/O
@@ -98,6 +106,7 @@ src/agent/
 
 prompts/
     SYSTEM.md               # Base system prompt
+    PLAN.md                 # Plan mode system prompt (read-only exploration)
 
 .agent/
     mcp.json                # MCP server config (Claude Code format)
@@ -136,7 +145,7 @@ Config
         api_key: str = "${ANTHROPIC_API_KEY}"
     reasoning: ReasoningConfig
         enabled: bool = True
-        budget_tokens: int = 10000      # min 1024
+        effort: str = "high"            # low, medium, high (adaptive thinking)
         show_thinking: bool = True
     compaction: CompactionConfig
         threshold_tokens: int = 80000
@@ -160,6 +169,14 @@ Config
         dirs: list[str] = ["skills/"]
     tools: ToolsConfig
         bash_timeout: int = 120
+        web_fetch: WebFetchConfig
+            timeout: int = 30
+            max_content_length: int = 50_000
+            user_agent: str = "Mozilla/5.0 (compatible; AgentCLI/0.1)"
+        web_search: WebSearchConfig
+            provider: str = "brave"
+            api_key: str = ""
+            max_results: int = 5
     mcp_servers: list[dict] = []
 ```
 
@@ -176,7 +193,7 @@ anthropic:
 
 reasoning:
   enabled: true
-  budget_tokens: 10000
+  effort: high               # low, medium, high (adaptive thinking)
   show_thinking: true
 
 compaction:
@@ -245,7 +262,7 @@ class LLMProvider(Protocol):
 - Streaming: `messages.stream()` async context manager
 - Events processed: `content_block_start`, `content_block_delta`, `content_block_stop`
 - Tool use: accumulates `input_json_delta` chunks, parses JSON on `content_block_stop`
-- Extended thinking: sends `thinking.type = "enabled"` with `budget_tokens` (min 1024). If `max_tokens <= budget`, auto-adjusts to `budget + max_tokens`
+- Adaptive thinking: sends `thinking.type = "adaptive"` with `output_config.effort` (`low`, `medium`, or `high`)
 
 ### Message Format (`core/message.py`)
 
@@ -340,8 +357,8 @@ There is no iteration limit — the LLM cycle continues until the model produces
 - skill-name: Description for LLM discovery
 - another-skill: Another description
 
-# Plan Mode (ACTIVE) / Active Plan
-[Plan JSON with instructions — only if plan mode or incomplete plan exists]
+# Active Plan
+[Markdown checkbox plan with edit instructions — only if plan file exists with unchecked items]
 ```
 
 ---
@@ -364,7 +381,10 @@ class Tool(Protocol):
 - `ToolRegistry` — central dict mapping `name -> Tool`
   - `register(tool)`, `get(name)`, `unregister(name)`
   - `all_definitions()` — returns Anthropic API format list
-  - `definitions_for(names)` — returns definitions filtered to a set of names (used by plan mode)
+  - `definitions_for(names)` — returns definitions filtered to a set of names
+  - `clone_excluding(names)` — new registry with all tools except excluded (used by `SubagentTool`)
+  - `clone_including(names)` — new registry with only specified tools (used by `PlanTool`)
+  - `list_names()` — return tool names as a list
 - `ToolExecutor(registry)` — lookup + execute pattern with error handling
 
 ### Built-in Tools
@@ -378,12 +398,15 @@ class Tool(Protocol):
 | `glob` | `pattern`, `path?` | File pattern matching, max 100 results, sorted by mtime |
 | `grep` | `pattern`, `path?`, `glob?`, `case_insensitive?`, `max_results?` | Content search via ripgrep or grep |
 | `ask_user` | `question` | Prompt user for input during LLM execution |
+| `web_fetch` | `url`, `prompt?`, `max_length?` | Fetch URL content (HTML/JSON/text), convert to text |
+| `web_search` | `query`, `max_results?` | Web search via Brave Search API or DuckDuckGo |
+| `subagent` | `action`, `task`, `system_prompt?`, `task_id?` | Delegate tasks to isolated sub-agents |
+| `plan` | `task` | Create structured plan via read-only sub-agent |
 | `memory_search` | `query`, `top_k?` | Hybrid search across memory + history |
 | `memory_save` | `content`, `target?` | Save to `daily` (default) or `main` memory |
 | `memory_read` | `target`, `date?` | Read `main`, `daily`, or list `dates` |
-| `update_plan` | `explanation`, `plan` | Update session plan (array of `{step, status}`) |
 
-Registration happens in `tools/builtin/__init__.py`. `register_builtins()` returns the `UpdatePlanTool` instance so the agent loop can wire it to the session's plan file.
+Registration happens in `tools/builtin/__init__.py` via `register_builtins()`. `SubagentTool` and `PlanTool` are registered separately in `__main__.py` after builtins and MCP setup, since they need access to the full tool registry for cloning.
 
 ### MCP Tools (`tools/mcp/`)
 
@@ -395,6 +418,41 @@ Registration happens in `tools/builtin/__init__.py`. `register_builtins()` retur
   - Extracts text content from MCP result
 - Environment variables in server config are interpolated at connection time
 - Also supports `.agent/mcp.json` (Claude Code format) with `mcpServers` key, auto-converted to internal format
+
+### Subagent System (`subagent/`, `tools/builtin/subagent.py`)
+
+Enables the LLM to delegate tasks to isolated sub-agents that run their own LLM cycles.
+
+**`SubagentRunner`** (`subagent/runner.py`)
+- Runs an independent LLM cycle with an ephemeral conversation (no history persistence)
+- Max 50 iterations hard limit
+- Supports conversation compaction for long-running tasks
+- Optional CLI streaming for real-time output
+- Dynamic placeholder replacement in system prompts: `{{CWD}}`, `{{LOCAL_TIME}}`
+
+**`SubagentTool`** (`tools/builtin/subagent.py`)
+- Four actions:
+  - `run` — synchronous execution, blocks until complete, returns result
+  - `launch` — async execution, returns `task_id` immediately
+  - `check` — check status of async task by `task_id`
+  - `list` — list all async tasks and their statuses
+- Tool filtering via `registry.clone_excluding()` — excludes `subagent` (prevent recursion), `plan`, `memory_save`, `ask_user`
+- `SubagentManager` tracks async tasks with results
+
+### Web Tools (`tools/builtin/web_fetch.py`, `tools/builtin/web_search.py`)
+
+**`WebFetchTool`**
+- HTTP GET via `httpx` with configurable timeout and User-Agent
+- Supports HTML, plain text, JSON, XML, CSV content types
+- HTML-to-text conversion: `html2text` library (preferred) with stdlib `HTMLParser` fallback
+- Content truncation to `max_content_length` (default 50,000 chars)
+- Optional `prompt` parameter prepended to content for context guidance
+
+**`WebSearchTool`**
+- **Brave Search API** (primary): requires `BRAVE_SEARCH_API_KEY` env var or `tools.web_search.api_key` config
+- **DuckDuckGo Lite** (fallback): HTML parsing via custom `DDGParser`, no API key required
+- Returns numbered results with title, URL, and snippet
+- Configurable `max_results` (default 5, max 20)
 
 ---
 
@@ -589,43 +647,44 @@ Non-disabled skill metadata is injected into the system prompt so the LLM can su
 
 ## Plan Mode
 
-Plan mode restricts the LLM to read-only tools and a structured `update_plan` tool, enabling an explore-then-implement workflow.
+The `plan` tool delegates planning to an isolated read-only sub-agent, enabling an explore-then-implement workflow.
 
 ### Architecture
 
-- **Session-bound**: Each plan is stored at `.agent/plans/<session_id>.json`, one plan per session
-- **Persistent**: The plan file on disk is the source of truth. `_build_system_prompt()` reads it fresh on every LLM call, so it survives compaction (which replaces conversation messages) and `/clear` (which resets conversation state)
-- **Auto-loaded**: When resuming a session via `/resume`, `_load_session_plan()` checks if an incomplete plan exists for that session and wires it up
+- **Tool-based**: Planning is invoked via the `plan` tool, not a `/plan` command toggle
+- **Sub-agent**: `PlanTool` spawns a `SubagentRunner` with the `PLAN.md` system prompt and a read-only tool set
+- **Session-bound**: Each plan is stored at `.agent/plans/<session_id>.md`, one plan per session
+- **Persistent**: The plan file on disk is the source of truth. `_build_system_prompt()` reads it fresh on every LLM call, so it survives compaction and `/clear`
+- **Auto-loaded**: When resuming a session via `/resume`, the plan is automatically loaded if it exists
 
 ### Plan File Format
 
-```json
-{
-  "explanation": "High-level approach description",
-  "plan": [
-    { "step": "Step description", "status": "pending|in_progress|completed" }
-  ]
-}
+Plans use markdown checkboxes in `.agent/plans/<session_id>.md`:
+
+```markdown
+- [x] Read the existing auth module
+- [ ] Add JWT verification middleware
+  - [ ] Create middleware function
+  - [ ] Add token validation
+- [ ] Write integration tests
+
+## Critical Files for Implementation
+- src/auth/middleware.py
+- tests/test_auth.py
 ```
 
 ### Two Modes of Plan Injection
 
-1. **In plan mode** (`_plan_mode = True`): System prompt includes planning instructions (read-only constraints, workflow guidance). Tool definitions filtered to `PLAN_MODE_TOOLS = {read, glob, grep, ask_user, memory_search, memory_read, update_plan}` plus any `mcp__*` tools. Safety net in `_execute_tool()` rejects blocked tools.
+1. **During planning**: The `plan` tool spawns a sub-agent with read-only tools (`read`, `glob`, `grep`, `bash`, `web_fetch`, `web_search` + MCP tools). The sub-agent explores the codebase and writes a checkbox plan. Output is streamed to the CLI in real-time.
 
-2. **After plan mode** (plan file exists with incomplete steps): System prompt includes the plan as an implementation guide. All tools are available. The LLM uses `update_plan` to mark steps as `in_progress`/`completed` as it works.
+2. **After planning** (plan file exists with unchecked items): The system prompt includes the plan as an implementation guide. All tools are available. The LLM uses the `edit` tool to check off steps (`- [ ]` → `- [x]`) as it works.
 
-### `/plan` Command Flow
-
-- **Enter**: Creates `.agent/plans/<session_id>.json` (or reuses existing). Sets `_plan_mode = True`, changes CLI prompt to `[plan] >>> `, wires `UpdatePlanTool._plan_file`.
-- **Exit**: Sets `_plan_mode = False`, reverts prompt. Plan file and tool wiring are preserved for implementation phase.
-- **Re-enter**: Reopens the same session plan file — the LLM can rewrite it with a different plan.
-
-### Tool Filtering (`_get_tool_definitions`)
+### Tool Filtering
 
 ```python
-if self._plan_mode:
-    allowed = {n for n in all_names if n in PLAN_MODE_TOOLS or n.startswith("mcp__")}
-    return self._tool_registry.definitions_for(allowed)
+# PlanTool uses clone_including for read-only sub-agent
+_PLAN_TOOLS = {"read", "glob", "grep", "bash", "web_fetch", "web_search"}
+filtered = parent_registry.clone_including(allowed | mcp_tools)
 ```
 
 ---
@@ -683,6 +742,9 @@ Terminal interface built on Rich (rendering) and prompt_toolkit (input):
 | `rich>=13.0` | Terminal rendering |
 | `prompt-toolkit>=3.0` | Input handling |
 | `mcp>=1.0` | Model Context Protocol client |
+| `httpx>=0.27` | HTTP client (web fetch/search tools) |
+| `beautifulsoup4>=4.12` | HTML parsing (web tools) |
+| `html2text>=2024.2` | HTML to markdown conversion (web tools) |
 | `numpy>=2.0` | Vector math for similarity |
 | `pyyaml>=6.0` | YAML parsing |
 | `tiktoken>=0.8` | Token counting |
@@ -720,3 +782,9 @@ Install: `pip install ai-agent[embedding]`
 7. **Anthropic message format internally** — all messages use Anthropic's content block format, keeping the core loop clean and consistent.
 
 8. **Graceful degradation** — embedding search falls back to keyword search if sentence-transformers is unavailable. MCP connection failures don't block startup. Compaction LLM failures use placeholder summaries.
+
+9. **Subagent isolation** — sub-agents run ephemeral conversations with filtered tool sets, preventing recursion and memory side effects. Max 50 iterations as a safety limit.
+
+10. **Plan as tool** — planning delegates to a read-only sub-agent rather than a stateful mode toggle, keeping the main agent loop simple and allowing plans to be created at any point during a conversation.
+
+11. **Adaptive thinking** — replaces fixed-budget extended thinking with adaptive mode (`low`/`medium`/`high` effort), letting the model decide how much reasoning to use.
