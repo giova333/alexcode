@@ -12,6 +12,9 @@ dependencies = [
     "numpy>=2.0",
     "pyyaml>=6.0",
     "tiktoken>=0.8",
+    "httpx>=0.27",
+    "beautifulsoup4>=4.12",
+    "html2text>=2024.2",
 ]
 
 [project.optional-dependencies]

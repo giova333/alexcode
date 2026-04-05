@@ -26,7 +26,7 @@ from agent.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
-PLAN_MODE_TOOLS = {"read", "glob", "grep", "ask_user", "memory_search", "memory_read", "update_plan"}
+PLAN_MODE_TOOLS = {"read", "glob", "grep", "ask_user", "memory_search", "memory_read", "update_plan", "web_fetch", "web_search"}
 
 # Shortcuts for /model command — maps aliases to full model IDs
 MODEL_ALIASES: dict[str, str] = {

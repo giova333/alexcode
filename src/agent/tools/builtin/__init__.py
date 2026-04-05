@@ -12,6 +12,8 @@ from agent.tools.builtin.glob_tool import GlobTool
 from agent.tools.builtin.grep import GrepTool
 from agent.tools.builtin.read import ReadTool
 from agent.tools.builtin.update_plan import UpdatePlanTool
+from agent.tools.builtin.web_fetch import WebFetchTool
+from agent.tools.builtin.web_search import WebSearchTool
 from agent.tools.builtin.write import WriteTool
 from agent.tools.registry import ToolRegistry
 
@@ -29,6 +31,16 @@ def register_builtins(
     registry.register(GlobTool())
     registry.register(GrepTool())
     registry.register(AskUserTool(cli))
+    registry.register(WebFetchTool(
+        timeout=config.tools.web_fetch.timeout,
+        max_content_length=config.tools.web_fetch.max_content_length,
+        user_agent=config.tools.web_fetch.user_agent,
+    ))
+    registry.register(WebSearchTool(
+        provider=config.tools.web_search.provider,
+        api_key=config.tools.web_search.api_key,
+        default_max_results=config.tools.web_search.max_results,
+    ))
 
     update_plan_tool = UpdatePlanTool()
     registry.register(update_plan_tool)

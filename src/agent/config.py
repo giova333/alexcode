@@ -78,8 +78,24 @@ class SkillsConfig:
 
 
 @dataclass
+class WebFetchConfig:
+    timeout: int = 30
+    max_content_length: int = 50_000
+    user_agent: str = "Mozilla/5.0 (compatible; AgentCLI/0.1)"
+
+
+@dataclass
+class WebSearchConfig:
+    provider: str = "brave"
+    api_key: str = ""
+    max_results: int = 5
+
+
+@dataclass
 class ToolsConfig:
     bash_timeout: int = 120
+    web_fetch: WebFetchConfig = field(default_factory=WebFetchConfig)
+    web_search: WebSearchConfig = field(default_factory=WebSearchConfig)
 
 
 @dataclass
@@ -184,6 +200,15 @@ def _deep_merge(base: dict, override: dict) -> None:
             base[key] = value
 
 
+def _build_tools_config(data: dict) -> ToolsConfig:
+    """Build ToolsConfig handling nested sub-configs."""
+    return ToolsConfig(
+        bash_timeout=data.get("bash_timeout", 120),
+        web_fetch=WebFetchConfig(**data.get("web_fetch", {})),
+        web_search=WebSearchConfig(**data.get("web_search", {})),
+    )
+
+
 def _dict_to_config(data: dict) -> Config:
     """Convert a raw dict into the typed Config dataclass tree."""
     anthropic_data = data.get("anthropic", {})
@@ -200,6 +225,6 @@ def _dict_to_config(data: dict) -> Config:
         embedding=EmbeddingConfig(**data.get("embedding", {})),
         history=HistoryConfig(**data.get("history", {})),
         skills=SkillsConfig(**data.get("skills", {})),
-        tools=ToolsConfig(**data.get("tools", {})),
+        tools=_build_tools_config(data.get("tools", {})),
         mcp_servers=data.get("mcp_servers", []) or [],
     )
