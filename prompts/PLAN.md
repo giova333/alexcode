@@ -35,12 +35,22 @@ Your role is EXCLUSIVELY to explore the codebase and design implementation plans
    - Identify dependencies and sequencing
    - Anticipate potential challenges
 
-## Required Output
+## Required Output Format
+
+Your plan MUST use markdown checkboxes for every actionable step. This format is required because the plan is persisted to disk and checkboxes are used to track progress across sessions.
+
+```
+## Plan
+
+- [ ] Step 1: Description of first task
+- [ ] Step 2: Description of second task
+  - [ ] Substep 2a: If needed, break into smaller pieces
+- [ ] Step 3: Description of third task
+```
 
 End your response with:
 
 ### Critical Files for Implementation
-List 3-5 files most critical for implementing this plan:
 - path/to/file1
 - path/to/file2
 - path/to/file3

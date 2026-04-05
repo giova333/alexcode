@@ -491,7 +491,12 @@ class AgentLoop:
                 if plan_text:
                     parts.append(f"""
 # Active Plan
-You have a plan to follow. Implement the steps below in order.
+You have a plan to follow. Work through the unchecked steps (`- [ ]`) in order.
+
+**Progress tracking:** After completing each step, use the `edit` tool to check it off in the plan file by replacing `- [ ]` with `- [x]`. This persists your progress so work can resume if interrupted.
+
+**Plan file:** {plan_file}
+
 Use the `plan` tool again if you need to revise the plan.
 
 {plan_text}""")
