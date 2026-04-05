@@ -45,7 +45,7 @@ MODEL_ALIASES: dict[str, str] = {
 _PROMPTS_DIR = Path(__file__).parent.parent.parent.parent / "prompts"
 
 
-def _load_system_prompt() -> str:
+def load_system_prompt() -> str:
     """Load the bundled SYSTEM.md prompt. Always required."""
     path = _PROMPTS_DIR / "SYSTEM.md"
     return path.read_text().strip()
@@ -497,7 +497,7 @@ class AgentLoop:
         return "\n\n".join(parts)
 
     async def _build_system_prompt(self) -> str:
-        system = _load_system_prompt()
+        system = load_system_prompt()
         # Inject dynamic context into placeholders
         system = system.replace("{{CWD}}", str(Path.cwd()))
         system = system.replace("{{LOCAL_TIME}}", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))

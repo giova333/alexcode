@@ -50,6 +50,18 @@ async def _async_main(args: argparse.Namespace) -> None:
     update_plan_tool = register_builtins(tool_registry, config, cli, memory_manager=memory_manager)
     tool_executor = ToolExecutor(tool_registry)
 
+    # Subagent tool (registered after builtins so clone_excluding captures all tools)
+    from agent.tools.builtin.subagent import SubagentTool
+    from agent.core.loop import load_system_prompt
+
+    subagent_tool = SubagentTool(
+        llm=llm,
+        parent_registry=tool_registry,
+        config=config,
+        default_system_prompt=load_system_prompt(),
+    )
+    tool_registry.register(subagent_tool)
+
     # MCP servers
     mcp_manager = MCPManager(tool_registry)
     if config.mcp_servers:

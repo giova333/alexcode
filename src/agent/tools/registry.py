@@ -45,5 +45,13 @@ class ToolRegistry:
             if tool.name in names
         ]
 
+    def clone_excluding(self, exclude_names: set[str]) -> ToolRegistry:
+        """Create a new registry with all tools except the excluded ones."""
+        new_registry = ToolRegistry()
+        for name, tool in self._tools.items():
+            if name not in exclude_names:
+                new_registry.register(tool)
+        return new_registry
+
     def list_names(self) -> list[str]:
         return list(self._tools.keys())
