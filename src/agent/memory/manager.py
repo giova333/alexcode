@@ -26,10 +26,12 @@ class MemoryManager:
         base_dir: Path,
         embedding_config: EmbeddingConfig | None = None,
         history_dir: str = ".agent/history/",
+        history_index_enabled: bool = True,
     ) -> None:
         self._config = config
         self._base_dir = base_dir
         self._history_dir = history_dir
+        self._history_index_enabled = history_index_enabled
         self._files = MemoryFiles(config.memory_file, base_dir)
         self._daily = DailyMemory(config.daily_dir, base_dir)
         self._embedding_config = embedding_config
@@ -141,7 +143,8 @@ class MemoryManager:
     def index_all(self) -> int:
         """Index all memory files + conversation history. Called on startup."""
         total = self._index_memory_files()
-        total += self._index_history()
+        if self._history_index_enabled:
+            total += self._index_history()
         return total
 
     def _index_memory_files(self) -> int:
@@ -235,6 +238,8 @@ class MemoryManager:
 
     def index_session(self, session_text: str, session_id: str) -> int:
         """Index a single session after it's saved."""
+        if not self._history_index_enabled:
+            return 0
         if not self._ensure_search():
             return 0
         return self._indexer.index_text(f"history/{session_id}", session_text)

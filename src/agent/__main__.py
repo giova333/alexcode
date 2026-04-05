@@ -43,6 +43,7 @@ async def _async_main(args: argparse.Namespace) -> None:
             project_dir,
             embedding_config=config.embedding if config.embedding.enabled else None,
             history_dir=config.history.dir,
+            history_index_enabled=config.history.index_enabled,
         )
 
     # Tools

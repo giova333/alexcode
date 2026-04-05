@@ -70,6 +70,7 @@ class EmbeddingConfig:
 @dataclass
 class HistoryConfig:
     dir: str = ".agent/history/"
+    index_enabled: bool = True
 
 
 @dataclass

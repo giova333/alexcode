@@ -31,6 +31,7 @@ embedding:
 
 history:
   dir: .agent/history/
+  index_enabled: true          # index session files (on startup and on save)
 
 skills:
   dirs:
