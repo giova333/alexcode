@@ -32,13 +32,28 @@ class CLI:
         self._completer.set_skills(skills)
 
     def print_welcome(self, provider: str, model: str) -> None:
+        kitten = (
+            "[bold cyan]"
+            "    /\\_/\\  \n"
+            "   ( o.o ) \n"
+            "    > ^ <  \n"
+            "   /|   |\\ \n"
+            "  (_|   |_)\n"
+            "[/bold cyan]"
+        )
+        info = (
+            f"[bold white]alexcode[/bold white] [dim]— {provider}/{model}[/dim]\n"
+            "\n"
+            "[dim]Type your message and press Enter. Use \\\\ for multiline.\n"
+            "Commands: /exit, /clear, /history, /model\n"
+            "Use @ for file references, / for commands. Tab to select.[/dim]"
+        )
+        self.console.print()
         self.console.print(
             Panel(
-                f"[bold]AI Agent[/bold] — {provider}/{model}\n"
-                "Type your message and press Enter. Use \\\\ for multiline.\n"
-                "Commands: /exit, /clear, /history, /model\n"
-                "Use @ for file references, / for commands. Tab to select.",
-                border_style="blue",
+                f"{kitten}\n{info}",
+                border_style="bright_blue",
+                padding=(1, 3),
             )
         )
 
