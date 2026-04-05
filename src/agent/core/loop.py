@@ -78,6 +78,7 @@ class AgentLoop:
         self._skill_loader = skill_loader
         self._skills = skills or []
         self._plan_tool = plan_tool
+        self._plan_mode = False
         self._setup_plan_file()
         self._compactor = Compactor(
             config.compaction,
@@ -247,8 +248,13 @@ class AgentLoop:
             system = await self._build_system_prompt()
             self._cli.print_assistant_text(f"```\n{system}\n```")
             return True
+        elif cmd == "/plan":
+            self._plan_mode = not self._plan_mode
+            status = "enabled" if self._plan_mode else "disabled"
+            self._cli.print_info(f"Plan mode {status}.")
+            return True
         elif cmd == "/help":
-            self._cli.print_info("Commands: /exit /clear /history /tokens /tools /sessions /resume [id] /compact /skills /model /prompt /help")
+            self._cli.print_info("Commands: /exit /clear /history /tokens /tools /sessions /resume [id] /compact /skills /model /plan /prompt /help")
             invocable = [s for s in self._skills if s.user_invocable]
             if invocable:
                 self._cli.print_info(f"Skills: {', '.join('/' + s.name for s in invocable)}")
@@ -483,12 +489,21 @@ class AgentLoop:
                     desc = f": {skill.description}" if skill.description else ""
                     parts.append(f"- {skill.name}{desc}")
 
+        # Plan mode instruction (toggled via /plan command)
+        if self._plan_mode:
+            parts.append("""
+# Plan Mode
+You are in plan mode. Do NOT make any edits, run destructive commands, or modify files.
+Only explore the codebase (read files, search, grep) and produce a plan.
+Use the `plan` tool to create or update plans. Once planning is complete, tell the user to run /plan again to exit plan mode.""")
+
         # Active plan (persisted by PlanTool, survives across sessions)
+        # Skip injection if all steps are completed (no unchecked `- [ ]` remaining).
         plan_file = self._plan_file_for_session()
         if plan_file.exists():
             try:
                 plan_text = plan_file.read_text().strip()
-                if plan_text:
+                if plan_text and "- [ ]" in plan_text:
                     parts.append(f"""
 # Active Plan
 You have a plan to follow. Work through the unchecked steps (`- [ ]`) in order.

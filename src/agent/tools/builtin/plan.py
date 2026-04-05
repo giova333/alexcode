@@ -25,6 +25,7 @@ _PLAN_TOOLS = frozenset({
     "bash",
     "web_fetch",
     "web_search",
+    "ask_user",
 })
 
 _PROMPTS_DIR = Path(__file__).parent.parent.parent.parent.parent / "prompts"

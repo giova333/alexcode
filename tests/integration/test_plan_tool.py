@@ -326,6 +326,31 @@ class TestPlanPersistenceInLoop:
         assert "unchecked" in system.lower() or "- [ ]" in system
         assert "- [x]" in system
 
+    async def test_completed_plan_not_injected(self, fake_llm, fake_cli, test_config, tmp_path):
+        """A fully completed plan (all - [x], no - [ ]) should NOT be injected."""
+        from tests.integration.conftest import build_agent
+
+        agent = build_agent(fake_llm, fake_cli, test_config, tmp_path)
+        plan_file = agent._plan_file_for_session()
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("## Plan\n- [x] Step 1: Done\n- [x] Step 2: Also done")
+
+        system = await agent._build_system_prompt()
+        assert "Active Plan" not in system
+
+    async def test_partially_completed_plan_still_injected(self, fake_llm, fake_cli, test_config, tmp_path):
+        """A plan with remaining unchecked steps should still be injected."""
+        from tests.integration.conftest import build_agent
+
+        agent = build_agent(fake_llm, fake_cli, test_config, tmp_path)
+        plan_file = agent._plan_file_for_session()
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("## Plan\n- [x] Step 1: Done\n- [ ] Step 2: Pending")
+
+        system = await agent._build_system_prompt()
+        assert "Active Plan" in system
+        assert "- [ ] Step 2: Pending" in system
+
     async def test_no_plan_no_injection(self, fake_llm, fake_cli, test_config, tmp_path):
         from tests.integration.conftest import build_agent
 
@@ -353,6 +378,45 @@ class TestPlanPersistenceInLoop:
 
         expected_path = tmp_path / ".agent" / "plans" / f"{agent._session_id}.md"
         assert plan_tool._plan_file == expected_path
+
+    async def test_plan_command_toggles_mode(self, fake_llm, fake_cli, test_config, tmp_path):
+        """The /plan command should toggle plan mode on and off."""
+        from tests.integration.conftest import build_agent
+
+        agent = build_agent(fake_llm, fake_cli, test_config, tmp_path)
+        assert agent._plan_mode is False
+
+        result = await agent._handle_command("/plan")
+        assert result is True
+        assert agent._plan_mode is True
+        assert any("enabled" in o.lower() for o in fake_cli.output)
+
+        fake_cli.output.clear()
+        result = await agent._handle_command("/plan")
+        assert result is True
+        assert agent._plan_mode is False
+        assert any("disabled" in o.lower() for o in fake_cli.output)
+
+    async def test_plan_mode_injects_instruction(self, fake_llm, fake_cli, test_config, tmp_path):
+        """When plan mode is active, system prompt should contain plan mode instruction."""
+        from tests.integration.conftest import build_agent
+
+        agent = build_agent(fake_llm, fake_cli, test_config, tmp_path)
+        agent._plan_mode = True
+
+        system = await agent._build_system_prompt()
+        assert "Plan Mode" in system
+        assert "Do NOT make any edits" in system
+
+    async def test_plan_mode_off_no_instruction(self, fake_llm, fake_cli, test_config, tmp_path):
+        """When plan mode is off, system prompt should NOT contain plan mode instruction."""
+        from tests.integration.conftest import build_agent
+
+        agent = build_agent(fake_llm, fake_cli, test_config, tmp_path)
+        assert agent._plan_mode is False
+
+        system = await agent._build_system_prompt()
+        assert "# Plan Mode" not in system
 
 
 # ===========================================================================
