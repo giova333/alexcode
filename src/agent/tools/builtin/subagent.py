@@ -7,13 +7,16 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Coroutine
+from typing import TYPE_CHECKING, Any, Coroutine
 
 from agent.config import Config
 from agent.llm.base import LLMProvider
 from agent.subagent.runner import SubagentRunner
 from agent.tools.executor import ToolExecutor
 from agent.tools.registry import ToolRegistry
+
+if TYPE_CHECKING:
+    from agent.cli import CLI
 
 logger = logging.getLogger(__name__)
 
@@ -82,11 +85,13 @@ class SubagentTool:
         parent_registry: ToolRegistry,
         config: Config,
         default_system_prompt: str,
+        cli: CLI | None = None,
     ) -> None:
         self._llm = llm
         self._parent_registry = parent_registry
         self._config = config
         self._default_system_prompt = default_system_prompt
+        self._cli = cli
         self._manager = SubagentManager()
 
     @property
@@ -190,4 +195,5 @@ class SubagentTool:
             tool_executor=child_executor,
             config=self._config,
             system_prompt=system_prompt,
+            cli=self._cli,
         )

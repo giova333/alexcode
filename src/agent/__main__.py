@@ -60,6 +60,7 @@ async def _async_main(args: argparse.Namespace) -> None:
         parent_registry=tool_registry,
         config=config,
         default_system_prompt=load_system_prompt(),
+        cli=cli,
     )
     tool_registry.register(subagent_tool)
 
