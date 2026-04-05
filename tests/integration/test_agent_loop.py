@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -11,7 +10,6 @@ from agent.core.loop import AgentLoop
 from agent.core.message import Message
 from agent.llm.base import TextDelta, ThinkingDelta, ToolUseEvent, ResponseComplete, UsageInfo
 from agent.tools.base import Tool
-from agent.tools.builtin.update_plan import UpdatePlanTool
 from agent.tools.executor import ToolExecutor
 from agent.tools.registry import ToolRegistry
 
@@ -331,62 +329,6 @@ class TestCommandHandling:
         handled = await agent._handle_command("/model")
         assert handled is True
         assert any("test-model" in o for o in fake_cli.output)
-
-
-@pytest.mark.integration
-class TestPlanMode:
-    """Plan mode: tool filtering and plan file management."""
-
-    async def test_plan_mode_creates_plan_file(self, fake_llm, fake_cli, test_config, tmp_path):
-        agent = build_agent(fake_llm, fake_cli, test_config, tmp_path)
-
-        await agent._handle_command("/plan")
-
-        assert agent._plan_mode is True
-        assert agent._plan_file is not None
-        assert agent._plan_file.exists()
-        data = json.loads(agent._plan_file.read_text())
-        assert "plan" in data
-
-    async def test_plan_mode_filters_tools(self, fake_llm, fake_cli, test_config, tmp_path):
-        echo = EchoTool()
-        agent = build_agent(fake_llm, fake_cli, test_config, tmp_path, extra_tools=[echo])
-
-        await agent._handle_command("/plan")
-
-        defs = agent._get_tool_definitions()
-        tool_names = {d["name"] for d in defs}
-        assert "echo" not in tool_names
-        assert "update_plan" in tool_names
-
-    async def test_plan_mode_blocks_tool_execution(self, fake_llm, fake_cli, test_config, tmp_path):
-        echo = EchoTool()
-        agent = build_agent(fake_llm, fake_cli, test_config, tmp_path, extra_tools=[echo])
-        await agent._handle_command("/plan")
-
-        result, is_error = await agent._execute_tool("echo", {"text": "hi"})
-        assert is_error is True
-        assert "not allowed in plan mode" in result
-
-    async def test_plan_mode_toggle(self, fake_llm, fake_cli, test_config, tmp_path):
-        agent = build_agent(fake_llm, fake_cli, test_config, tmp_path)
-
-        await agent._handle_command("/plan")
-        assert agent._plan_mode is True
-
-        await agent._handle_command("/plan")
-        assert agent._plan_mode is False
-
-    async def test_plan_in_system_prompt(self, fake_llm, fake_cli, test_config, tmp_path):
-        agent = build_agent(fake_llm, fake_cli, test_config, tmp_path)
-        await agent._handle_command("/plan")
-
-        plan_data = {"explanation": "Test plan", "plan": [{"step": "Step 1", "status": "pending"}]}
-        agent._plan_file.write_text(json.dumps(plan_data))
-
-        system = await agent._build_system_prompt()
-        assert "Plan Mode (ACTIVE)" in system
-        assert "Step 1" in system
 
 
 @pytest.mark.integration

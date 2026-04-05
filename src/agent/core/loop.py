@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from datetime import datetime
@@ -20,13 +19,11 @@ from agent.llm.base import LLMProvider, TextDelta, ThinkingDelta, ToolUseEvent, 
 from agent.memory.manager import MemoryManager
 from agent.skills.loader import SkillLoader
 from agent.skills.skill import Skill
-from agent.tools.builtin.update_plan import UpdatePlanTool
+from agent.tools.builtin.plan import PlanTool
 from agent.tools.executor import ToolExecutor
 from agent.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
-
-PLAN_MODE_TOOLS = {"read", "glob", "grep", "ask_user", "memory_search", "memory_read", "update_plan", "web_fetch", "web_search"}
 
 # Shortcuts for /model command — maps aliases to full model IDs
 MODEL_ALIASES: dict[str, str] = {
@@ -66,7 +63,7 @@ class AgentLoop:
         history: HistoryStorage | None = None,
         skill_loader: SkillLoader | None = None,
         skills: list[Skill] | None = None,
-        update_plan_tool: UpdatePlanTool | None = None,
+        plan_tool: PlanTool | None = None,
     ) -> None:
         self._config = config
         self._llm = llm
@@ -80,36 +77,23 @@ class AgentLoop:
         self._session_id = history.new_session_id() if history else ""
         self._skill_loader = skill_loader
         self._skills = skills or []
-        self._plan_mode = False
-        self._update_plan_tool = update_plan_tool
+        self._plan_tool = plan_tool
+        self._setup_plan_file()
         self._compactor = Compactor(
             config.compaction,
             llm,
             memory_manager,
             self._conversation,
         )
-        # Load plan for this session (if one exists on disk)
-        self._load_session_plan()
 
     def _plan_file_for_session(self) -> Path:
         """Return the plan file path for the current session."""
-        return self._project_dir / ".agent" / "plans" / f"{self._session_id}.json"
+        return self._project_dir / ".agent" / "plans" / f"{self._session_id}.md"
 
-    def _load_session_plan(self) -> None:
-        """Load the plan file for the current session if it exists and is incomplete."""
-        plan_file = self._plan_file_for_session()
-        if plan_file.exists():
-            try:
-                data = json.loads(plan_file.read_text())
-                steps = data.get("plan", [])
-                if steps and any(s.get("status") != "completed" for s in steps):
-                    self._plan_file = plan_file
-                    if self._update_plan_tool:
-                        self._update_plan_tool.set_plan_file(plan_file)
-                    return
-            except (json.JSONDecodeError, OSError):
-                pass
-        self._plan_file = None
+    def _setup_plan_file(self) -> None:
+        """Point the PlanTool at this session's plan file."""
+        if self._plan_tool:
+            self._plan_tool.set_plan_file(self._plan_file_for_session())
 
     def resume_session(self, session_id: str) -> bool:
         """Load a previous session into the conversation. Returns True on success."""
@@ -120,7 +104,7 @@ class AgentLoop:
             return False
         self._conversation.load_messages(messages)
         self._session_id = session_id
-        self._load_session_plan()
+        self._setup_plan_file()
         return True
 
     async def run(self) -> None:
@@ -190,32 +174,6 @@ class AgentLoop:
                 defs = self._get_tool_definitions()
                 for d in defs:
                     self._cli.print_info(f"  {d['name']}")
-            return True
-        elif cmd == "/plan":
-            if self._plan_mode:
-                # Exiting plan mode — plan stays in prompt for execution
-                self._plan_mode = False
-                self._cli.plan_mode = False
-                summary = self._read_plan_summary()
-                self._cli.print_info(f"Plan mode OFF. Plan saved: {self._plan_file}")
-                if summary:
-                    self._cli.print_info(summary)
-            else:
-                # Entering plan mode — create or reuse this session's plan file
-                plan_file = self._plan_file_for_session()
-                plan_file.parent.mkdir(parents=True, exist_ok=True)
-                if not plan_file.exists():
-                    initial = {"explanation": "", "plan": []}
-                    plan_file.write_text(json.dumps(initial, indent=2))
-                self._plan_file = plan_file
-                if self._update_plan_tool:
-                    self._update_plan_tool.set_plan_file(plan_file)
-                self._plan_mode = True
-                self._cli.plan_mode = True
-                summary = self._read_plan_summary()
-                self._cli.print_info(f"Plan mode ON. File: {self._plan_file}")
-                if summary:
-                    self._cli.print_info(summary)
             return True
         elif cmd == "/sessions":
             if self._history:
@@ -290,7 +248,7 @@ class AgentLoop:
             self._cli.print_assistant_text(f"```\n{system}\n```")
             return True
         elif cmd == "/help":
-            self._cli.print_info("Commands: /exit /clear /history /tokens /tools /sessions /resume [id] /compact /skills /model /prompt /plan /help")
+            self._cli.print_info("Commands: /exit /clear /history /tokens /tools /sessions /resume [id] /compact /skills /model /prompt /help")
             invocable = [s for s in self._skills if s.user_invocable]
             if invocable:
                 self._cli.print_info(f"Skills: {', '.join('/' + s.name for s in invocable)}")
@@ -473,8 +431,6 @@ class AgentLoop:
             await self._maybe_compact()
 
     async def _execute_tool(self, name: str, input_data: dict) -> tuple[str, bool]:
-        if self._plan_mode and name not in PLAN_MODE_TOOLS and not name.startswith("mcp__"):
-            return f"Tool '{name}' is not allowed in plan mode. Only read-only tools and update_plan are available.", True
         if self._tool_executor is None:
             return f"Tool '{name}' not available (no tools registered).", True
         try:
@@ -527,81 +483,26 @@ class AgentLoop:
                     desc = f": {skill.description}" if skill.description else ""
                     parts.append(f"- {skill.name}{desc}")
 
-        # Plan context (read from disk — persists across compaction and /clear)
-        if self._plan_file and self._plan_file.exists():
+        # Active plan (persisted by PlanTool, survives across sessions)
+        plan_file = self._plan_file_for_session()
+        if plan_file.exists():
             try:
-                plan_content = self._plan_file.read_text()
-                plan_data = json.loads(plan_content)
-                plan_json = json.dumps(plan_data, indent=2)
-            except (json.JSONDecodeError, OSError):
-                plan_data = None
-                plan_json = None
-
-            if plan_data is not None:
-                if self._plan_mode:
+                plan_text = plan_file.read_text().strip()
+                if plan_text:
                     parts.append(f"""
-# Plan Mode (ACTIVE)
-You are in PLAN MODE. Your job is to explore the codebase and create/update a structured plan.
-
-**Constraints:**
-- You can ONLY use read-only tools: read, glob, grep, ask_user
-- Use `update_plan` to update the plan with explanation and steps
-- You CANNOT modify any files (no bash, write, or edit)
-
-**Workflow:**
-1. Explore — use read/glob/grep to understand the relevant code
-2. Analyze — identify patterns, dependencies, and constraints
-3. Plan — break the work into concrete steps with statuses
-4. Update — call `update_plan` after each discovery to keep the plan current
-
-**Step statuses:** pending, in_progress, completed
-**Plan file:** {self._plan_file}
-
-Current plan:
-```json
-{plan_json}
-```""")
-                else:
-                    # Not in plan mode — show plan as implementation guide
-                    steps = plan_data.get("plan", [])
-                    has_incomplete = any(s.get("status") != "completed" for s in steps)
-                    if has_incomplete:
-                        parts.append(f"""
 # Active Plan
-You have a plan to follow. Implement the steps below in order, updating each step's status as you go.
-Use `update_plan` to mark steps as in_progress/completed as you work through them.
+You have a plan to follow. Implement the steps below in order.
+Use the `plan` tool again if you need to revise the plan.
 
-Plan file: {self._plan_file}
-
-```json
-{plan_json}
-```""")
+{plan_text}""")
+            except OSError:
+                pass
 
         return "\n".join(parts)
-
-    def _read_plan_summary(self) -> str:
-        """Return a summary of the current plan for display."""
-        if not self._plan_file or not self._plan_file.exists():
-            return ""
-        try:
-            data = json.loads(self._plan_file.read_text())
-            steps = data.get("plan", [])
-            if not steps:
-                return "  (empty plan)"
-            completed = sum(1 for s in steps if s.get("status") == "completed")
-            in_progress = sum(1 for s in steps if s.get("status") == "in_progress")
-            pending = sum(1 for s in steps if s.get("status") == "pending")
-            return f"  {len(steps)} steps: {completed} completed, {in_progress} in progress, {pending} pending"
-        except (json.JSONDecodeError, OSError):
-            return ""
 
     def _get_tool_definitions(self) -> list[dict[str, Any]]:
         if self._tool_registry is None:
             return []
-        if self._plan_mode:
-            all_names = set(self._tool_registry.list_names())
-            allowed = {n for n in all_names if n in PLAN_MODE_TOOLS or n.startswith("mcp__")}
-            return self._tool_registry.definitions_for(allowed)
         return self._tool_registry.all_definitions()
 
     def _save_history(self) -> None:

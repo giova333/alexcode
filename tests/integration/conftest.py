@@ -22,7 +22,6 @@ from agent.llm.base import (
     UsageInfo,
 )
 from agent.memory.manager import MemoryManager
-from agent.tools.builtin.update_plan import UpdatePlanTool
 from agent.tools.executor import ToolExecutor
 from agent.tools.registry import ToolRegistry
 
@@ -181,7 +180,6 @@ class FakeCLI:
         self.output: list[str] = []
         self.tool_uses: list[tuple[str, dict]] = []
         self.tool_results: list[tuple[str, str, bool]] = []
-        self.plan_mode: bool = False
         self.thinking_started: int = 0
         self.thinking_ended: int = 0
 
@@ -285,8 +283,6 @@ def build_agent(
         for t in extra_tools:
             registry.register(t)
     executor = ToolExecutor(registry)
-    update_plan = UpdatePlanTool()
-    registry.register(update_plan)
     return AgentLoop(
         config=test_config,
         llm=fake_llm,
@@ -298,5 +294,4 @@ def build_agent(
         history=history,
         skill_loader=skill_loader,
         skills=skills,
-        update_plan_tool=update_plan,
     )

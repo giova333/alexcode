@@ -18,7 +18,6 @@ class CLI:
 
     def __init__(self, working_dir: Path | None = None) -> None:
         self.console = Console()
-        self._plan_mode = False
         history_path = Path.home() / ".config" / "agent" / "input_history"
         history_path.parent.mkdir(parents=True, exist_ok=True)
         self._completer = AgentCompleter(working_dir=working_dir)
@@ -27,14 +26,6 @@ class CLI:
             completer=self._completer,
             complete_while_typing=True,
         )
-
-    @property
-    def plan_mode(self) -> bool:
-        return self._plan_mode
-
-    @plan_mode.setter
-    def plan_mode(self, value: bool) -> None:
-        self._plan_mode = value
 
     def set_skills(self, skills: list[tuple[str, str]]) -> None:
         """Update available skill commands for autocompletion."""
@@ -56,10 +47,7 @@ class CLI:
         try:
             lines: list[str] = []
             while True:
-                if self._plan_mode:
-                    prompt = "[plan] >>> " if not lines else "[plan] ... "
-                else:
-                    prompt = ">>> " if not lines else "... "
+                prompt = ">>> " if not lines else "... "
                 line = await self._session.prompt_async(prompt)
                 if line.endswith("\\"):
                     lines.append(line[:-1])

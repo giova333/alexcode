@@ -47,7 +47,7 @@ async def _async_main(args: argparse.Namespace) -> None:
 
     # Tools
     tool_registry = ToolRegistry()
-    update_plan_tool = register_builtins(tool_registry, config, cli, memory_manager=memory_manager)
+    register_builtins(tool_registry, config, cli, memory_manager=memory_manager)
     tool_executor = ToolExecutor(tool_registry)
 
     # Subagent tool (registered after builtins so clone_excluding captures all tools)
@@ -69,6 +69,17 @@ async def _async_main(args: argparse.Namespace) -> None:
         connected = await mcp_manager.connect_all(config.mcp_servers)
         if connected:
             cli.print_info(f"Connected: {', '.join(connected)}")
+
+    # Plan tool (registered after MCP so it can see MCP tools in parent registry)
+    from agent.tools.builtin.plan import PlanTool
+
+    plan_tool = PlanTool(
+        llm=llm,
+        parent_registry=tool_registry,
+        config=config,
+        cli=cli,
+    )
+    tool_registry.register(plan_tool)
 
     # Index memory + recent history on startup
     if memory_manager and config.memory.index_on_startup:
@@ -101,7 +112,7 @@ async def _async_main(args: argparse.Namespace) -> None:
         history=history,
         skill_loader=skill_loader,
         skills=skills,
-        update_plan_tool=update_plan_tool,
+        plan_tool=plan_tool,
     )
 
     # Resume a previous session if requested

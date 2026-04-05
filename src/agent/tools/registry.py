@@ -53,5 +53,13 @@ class ToolRegistry:
                 new_registry.register(tool)
         return new_registry
 
+    def clone_including(self, include_names: set[str]) -> ToolRegistry:
+        """Create a new registry with only the specified tools."""
+        new_registry = ToolRegistry()
+        for name, tool in self._tools.items():
+            if name in include_names:
+                new_registry.register(tool)
+        return new_registry
+
     def list_names(self) -> list[str]:
         return list(self._tools.keys())

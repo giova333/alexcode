@@ -130,17 +130,14 @@ class TestSessionResume:
 
     async def test_resume_loads_messages(self, fake_llm, fake_cli, test_config, tmp_path):
         from agent.core.loop import AgentLoop
-        from agent.tools.builtin.update_plan import UpdatePlanTool
-
+        
         history = HistoryStorage(test_config.history.dir, tmp_path)
-        update_plan = UpdatePlanTool()
 
         # Create agent, send a message, save
         fake_llm.set_text_response("First response")
         agent1 = AgentLoop(
             config=test_config, llm=fake_llm, cli=fake_cli,
-            project_dir=tmp_path, history=history, update_plan_tool=update_plan,
-        )
+            project_dir=tmp_path, history=history,        )
         await agent1._process_message("First question")
         sid = agent1._session_id
         agent1._save_history()
@@ -148,8 +145,7 @@ class TestSessionResume:
         # New agent resumes the session
         agent2 = AgentLoop(
             config=test_config, llm=fake_llm, cli=fake_cli,
-            project_dir=tmp_path, history=history, update_plan_tool=update_plan,
-        )
+            project_dir=tmp_path, history=history,        )
         success = agent2.resume_session(sid)
         assert success is True
         assert len(agent2._conversation.messages) == 2
@@ -158,10 +154,8 @@ class TestSessionResume:
     async def test_resume_after_compaction(self, fake_llm, fake_cli, test_config, tmp_path, memory_manager):
         """Session resume works correctly after compaction has rewritten history."""
         from agent.core.loop import AgentLoop
-        from agent.tools.builtin.update_plan import UpdatePlanTool
-
+        
         history = HistoryStorage(test_config.history.dir, tmp_path)
-        update_plan = UpdatePlanTool()
 
         # Build first agent, fill conversation
         fake_llm.set_text_response("reply 1")
@@ -170,8 +164,7 @@ class TestSessionResume:
         agent1 = AgentLoop(
             config=test_config, llm=fake_llm, cli=fake_cli,
             project_dir=tmp_path, history=history,
-            memory_manager=memory_manager, update_plan_tool=update_plan,
-        )
+            memory_manager=memory_manager,        )
         await agent1._process_message("msg 1")
         await agent1._process_message("msg 2")
         await agent1._process_message("msg 3")
@@ -190,8 +183,7 @@ class TestSessionResume:
         # Resume with new agent
         agent2 = AgentLoop(
             config=test_config, llm=fake_llm, cli=fake_cli,
-            project_dir=tmp_path, history=history, update_plan_tool=update_plan,
-        )
+            project_dir=tmp_path, history=history,        )
         success = agent2.resume_session(sid)
         assert success is True
         # First message should be the compaction summary

@@ -20,9 +20,9 @@ logger = logging.getLogger(__name__)
 # Tools excluded from subagent registries.
 _EXCLUDED_TOOLS = frozenset({
     "subagent",      # prevent recursive spawning
+    "plan",          # prevent subagents from spawning plan agents
     "memory_save",   # prevent memory modification
     "ask_user",      # subagents run non-interactively
-    "update_plan",   # plan is session-scoped
 })
 
 

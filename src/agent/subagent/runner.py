@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from agent.compaction.compactor import Compactor
 from agent.config import Config
@@ -13,6 +13,9 @@ from agent.core.tokens import count_message_tokens
 from agent.llm.base import LLMProvider, TextDelta, ThinkingDelta, ToolUseEvent, ResponseComplete
 from agent.tools.executor import ToolExecutor
 from agent.tools.registry import ToolRegistry
+
+if TYPE_CHECKING:
+    from agent.cli import CLI
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +27,9 @@ class SubagentRunner:
 
     This is a stripped-down version of AgentLoop._run_llm_cycle() with no CLI
     interaction, no history persistence, no plan mode, and no memory writes.
+
+    When *cli* is provided, streaming output (text deltas, tool events) is
+    displayed in the terminal in real time — the same way AgentLoop does it.
     """
 
     def __init__(
@@ -33,12 +39,14 @@ class SubagentRunner:
         tool_executor: ToolExecutor,
         config: Config,
         system_prompt: str,
+        cli: CLI | None = None,
     ) -> None:
         self._llm = llm
         self._tool_registry = tool_registry
         self._tool_executor = tool_executor
         self._config = config
         self._system_prompt = system_prompt
+        self._cli = cli
         self._conversation = Conversation()
         self._compactor = Compactor(
             config.compaction,
@@ -64,10 +72,14 @@ class SubagentRunner:
             tool_uses: list[ToolUseEvent] = []
             usage_info: ResponseComplete | None = None
             thinking_blocks: list[dict[str, Any]] = []
+            is_thinking = False
 
             reasoning_cfg = (
                 self._config.reasoning if self._config.reasoning.enabled else None
             )
+
+            if self._cli:
+                self._cli.start_response()
 
             async for event in self._llm.stream(
                 system=self._system_prompt,
@@ -77,13 +89,32 @@ class SubagentRunner:
                 reasoning=reasoning_cfg,
             ):
                 if isinstance(event, ThinkingDelta):
-                    pass  # collected via ResponseComplete.thinking_blocks
+                    if self._cli:
+                        if not is_thinking:
+                            is_thinking = True
+                            self._cli.start_thinking()
+                        if self._config.reasoning.show_thinking:
+                            self._cli.print_thinking_delta(event.text)
                 elif isinstance(event, TextDelta):
+                    if self._cli and is_thinking:
+                        is_thinking = False
+                        self._cli.end_thinking()
                     text_parts.append(event.text)
+                    if self._cli:
+                        self._cli.print_text_delta(event.text)
                 elif isinstance(event, ToolUseEvent):
+                    if self._cli and is_thinking:
+                        is_thinking = False
+                        self._cli.end_thinking()
                     tool_uses.append(event)
                 elif isinstance(event, ResponseComplete):
+                    if self._cli and is_thinking:
+                        is_thinking = False
+                        self._cli.end_thinking()
                     usage_info = event
+
+            if self._cli:
+                self._cli.end_response()
 
             # Build assistant message
             content_blocks: list[dict[str, Any]] = []
@@ -107,6 +138,8 @@ class SubagentRunner:
 
             if usage_info:
                 self._conversation.total_tokens = usage_info.usage.input_tokens
+                if self._cli:
+                    self._cli.print_usage(usage_info.usage.input_tokens, usage_info.usage.output_tokens)
 
             # No tool calls — we have the final response
             if not tool_uses:
@@ -116,11 +149,17 @@ class SubagentRunner:
             tool_result_blocks: list[dict[str, Any]] = []
             for tu in tool_uses:
                 try:
+                    if self._cli:
+                        self._cli.print_tool_use(tu.name, tu.input)
                     result_text = await self._tool_executor.execute(tu.name, tu.input)
                     is_error = False
+                    if self._cli:
+                        self._cli.print_tool_result(tu.name, result_text, is_error)
                 except Exception as e:
                     result_text = f"Error executing {tu.name}: {e}"
                     is_error = True
+                    if self._cli:
+                        self._cli.print_tool_result(tu.name, result_text, is_error)
                 tool_result_blocks.append({
                     "type": "tool_result",
                     "tool_use_id": tu.id,
