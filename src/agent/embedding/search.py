@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 
 from agent.config import EmbeddingConfig
+from agent.embedding.model import get_embedding_model
 from agent.embedding.store import Chunk, EmbeddingStore
 
 
@@ -24,20 +25,12 @@ class HybridSearch:
     def __init__(self, config: EmbeddingConfig, store: EmbeddingStore) -> None:
         self._config = config
         self._store = store
-        self._model: Any = None
         self._bm25: Any = None
         self._chunks: list[Chunk] = []
 
     def _get_model(self) -> Any:
-        if self._model is None:
-            try:
-                from sentence_transformers import SentenceTransformer
-                self._model = SentenceTransformer(self._config.model)
-            except ImportError:
-                raise RuntimeError(
-                    "sentence-transformers not installed. Install with: pip install ai-agent[embedding]"
-                )
-        return self._model
+        """Return shared embedding model (lazy-loaded on first call)."""
+        return get_embedding_model(self._config.model)
 
     def _rebuild_bm25(self) -> None:
         """Rebuild BM25 index from stored chunks."""

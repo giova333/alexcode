@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.config import EmbeddingConfig
+from agent.embedding.model import get_embedding_model
 from agent.embedding.store import EmbeddingStore
 
 
@@ -17,19 +18,10 @@ class EmbeddingIndexer:
     def __init__(self, config: EmbeddingConfig, base_dir: Path) -> None:
         self._config = config
         self._store = EmbeddingStore(config.db_path, base_dir)
-        self._model: Any = None
 
     def _get_model(self) -> Any:
-        """Lazy-load sentence-transformers model."""
-        if self._model is None:
-            try:
-                from sentence_transformers import SentenceTransformer
-                self._model = SentenceTransformer(self._config.model)
-            except ImportError:
-                raise RuntimeError(
-                    "sentence-transformers not installed. Install with: pip install ai-agent[embedding]"
-                )
-        return self._model
+        """Return shared embedding model (lazy-loaded on first call)."""
+        return get_embedding_model(self._config.model)
 
     @staticmethod
     def _content_hash(text: str) -> str:
@@ -102,3 +94,4 @@ class EmbeddingIndexer:
     @property
     def store(self) -> EmbeddingStore:
         return self._store
+
