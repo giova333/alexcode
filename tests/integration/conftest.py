@@ -243,7 +243,7 @@ def memory_manager(test_config: Config, tmp_path) -> MemoryManager:
     return MemoryManager(
         config=test_config.memory,
         base_dir=tmp_path,
-        embedding_config=None,
+        mem0_client=None,
     )
 
 

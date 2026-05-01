@@ -16,22 +16,24 @@ compaction:
 
 memory:
   enabled: true
-  memory_file: .agent/memory/MEMORY.md
-  daily_dir: .agent/memory/daily/
-  context_days: 2                # days of daily notes in system prompt
-  index_on_startup: true         # index memory + recent history at startup
+  memory_file: ~/.config/agent/MEMORY.md   # user-scoped; one file across all projects
+  scope: global                            # "global" (cross-project) or "project" (this project only)
 
-embedding:
+mem0:
   enabled: true
-  model: all-MiniLM-L6-v2
-  db_path: .agent/embeddings.db
-  hybrid_alpha: 0.7
-  chunk_size: 512
-  chunk_overlap: 50
+  project_store_dir: .agent/mem0/project/
+  global_store_dir: ~/.config/agent/mem0/global/
+  llm:
+    provider: anthropic
+    model: claude-haiku-4-5
+    api_key: "${ANTHROPIC_API_KEY}"
+  embedder:
+    provider: openai
+    model: text-embedding-3-small
+    api_key: "${OPENAI_API_KEY}"
 
 history:
   dir: .agent/history/
-  index_enabled: true          # index session files (on startup and on save)
 
 skills:
   dirs:

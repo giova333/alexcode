@@ -51,7 +51,6 @@ class SubagentRunner:
         self._compactor = Compactor(
             config.compaction,
             llm,
-            memory_manager=None,
             conversation=self._conversation,
         )
 

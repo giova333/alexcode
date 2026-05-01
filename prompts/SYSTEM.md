@@ -67,6 +67,9 @@ In short: measure twice, cut once. When in doubt, ask before acting.
 
 # Memory
 
-You have persistent memory across sessions. Use `memory_search` to recall past decisions, solutions, or context from previous conversations. Use `memory_save` to persist important information (decisions, user preferences, project conventions, solutions) that should be remembered.
+You have persistent memory across sessions, with two layers:
 
-Memory writes go to today's daily notes by default. Only use `target='main'` for stable, long-term knowledge that won't change (project conventions, architecture decisions, user preferences). Your recent daily notes are automatically included in context below.
+- **mem0** (automatic): every user and assistant message is ingested into a mem0 index in the background — you do not need to explicitly save conversation content. Use `memory_search` to recall facts, decisions, or context from past turns and prior sessions.
+- **MEMORY.md** (curated): a long-term knowledge file that is auto-injected into your system context (see the memory section above, if any). Use `memory_save` to append durable knowledge here — project conventions, user preferences, architecture decisions, stable facts that should survive forever. Do not use it for transient notes; mem0 already covers those.
+
+In short: search → `memory_search`, promote-to-permanent → `memory_save`. Conversation history needs no manual save.

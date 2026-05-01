@@ -4,7 +4,24 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
+import os
 from pathlib import Path
+
+_LOG_LEVEL = os.environ.get("AGENT_LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, _LOG_LEVEL, logging.INFO),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+# Quiet down chatty third-party loggers unless the user explicitly enabled DEBUG.
+if _LOG_LEVEL != "DEBUG":
+    for noisy in ("httpx", "httpcore", "chromadb", "urllib3", "openai", "anthropic"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+    # mem0 emits per-message INFO/WARNING noise (chroma inserts, optional-spacy fallbacks).
+    # Silence everything below ERROR; our own agent.memory.mem0_client logs cover the signal.
+    for noisy in ("mem0", "mem0.utils.spacy_models", "mem0.vector_stores"):
+        logging.getLogger(noisy).setLevel(logging.ERROR)
 
 from agent.cli import CLI
 from agent.config import Config
@@ -36,14 +53,24 @@ async def _async_main(args: argparse.Namespace) -> None:
     llm = _create_llm_provider(config)
 
     # Memory (initialize early so tools can reference it)
+    mem0_client = None
+    if config.memory.enabled and config.mem0.enabled:
+        try:
+            from agent.memory.mem0_client import Mem0Client
+            mem0_client = Mem0Client(
+                config.mem0,
+                scope=config.memory.scope,
+                project_dir=project_dir,
+            )
+        except Exception as e:
+            cli.print_info(f"mem0 disabled: {e}")
+
     memory_manager = None
     if config.memory.enabled:
         memory_manager = MemoryManager(
             config.memory,
             project_dir,
-            embedding_config=config.embedding if config.embedding.enabled else None,
-            history_dir=config.history.dir,
-            history_index_enabled=config.history.index_enabled,
+            mem0_client=mem0_client,
         )
 
     # Tools
@@ -82,15 +109,6 @@ async def _async_main(args: argparse.Namespace) -> None:
         cli=cli,
     )
     tool_registry.register(plan_tool)
-
-    # Index memory + recent history on startup
-    if memory_manager and config.memory.index_on_startup:
-        try:
-            indexed = memory_manager.index_all()
-            if indexed:
-                cli.print_info(f"Indexed {indexed} memory chunks.")
-        except Exception as e:
-            cli.print_info(f"Memory indexing skipped: {e}")
 
     # History
     history = HistoryStorage(config.history.dir, project_dir)
@@ -135,6 +153,8 @@ async def _async_main(args: argparse.Namespace) -> None:
         cli.print_info("Goodbye!")
     finally:
         await mcp_manager.close()
+        if mem0_client is not None:
+            await mem0_client.aclose()
 
 
 def main() -> None:

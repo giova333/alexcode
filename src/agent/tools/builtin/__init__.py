@@ -43,11 +43,6 @@ def register_builtins(
 
     # Memory tools (only if memory is enabled)
     if memory_manager is not None:
-        from agent.tools.builtin.memory_tool import (
-            MemoryReadTool,
-            MemorySaveTool,
-            MemorySearchTool,
-        )
+        from agent.tools.builtin.memory_tool import MemorySaveTool, MemorySearchTool
         registry.register(MemorySearchTool(memory_manager))
         registry.register(MemorySaveTool(memory_manager))
-        registry.register(MemoryReadTool(memory_manager))

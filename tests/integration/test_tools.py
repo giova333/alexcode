@@ -225,72 +225,27 @@ class TestBuiltinBashTool:
 class TestMemoryToolsE2E:
     """Memory tools called through ToolRegistry/ToolExecutor like the agent does."""
 
-    async def test_memory_save_and_search(self, memory_manager, tmp_path):
-        from agent.tools.builtin.memory_tool import MemorySaveTool, MemorySearchTool
+    async def test_memory_save_writes_to_main(self, memory_manager, tmp_path):
+        from agent.tools.builtin.memory_tool import MemorySaveTool
 
         registry = ToolRegistry()
         registry.register(MemorySaveTool(memory_manager))
-        registry.register(MemorySearchTool(memory_manager))
         executor = ToolExecutor(registry)
 
-        # Save via tool
         result = await executor.execute("memory_save", {
             "content": "The project uses Redis for caching",
-            "target": "daily",
         })
-        assert "Saved" in result
+        assert "MEMORY.md" in result
 
-        # Search via tool
-        result = await executor.execute("memory_search", {"query": "Redis"})
-        assert "Redis" in result
+        contents = await memory_manager.read_main()
+        assert "Redis" in contents
 
-    async def test_memory_save_to_main(self, memory_manager, tmp_path):
-        from agent.tools.builtin.memory_tool import MemorySaveTool, MemoryReadTool
-
-        registry = ToolRegistry()
-        registry.register(MemorySaveTool(memory_manager))
-        registry.register(MemoryReadTool(memory_manager))
-        executor = ToolExecutor(registry)
-
-        await executor.execute("memory_save", {
-            "content": "Always use type hints",
-            "target": "main",
-        })
-
-        result = await executor.execute("memory_read", {"target": "main"})
-        assert "type hints" in result
-
-    async def test_memory_read_daily(self, memory_manager, tmp_path):
-        from agent.tools.builtin.memory_tool import MemorySaveTool, MemoryReadTool
-
-        registry = ToolRegistry()
-        registry.register(MemorySaveTool(memory_manager))
-        registry.register(MemoryReadTool(memory_manager))
-        executor = ToolExecutor(registry)
-
-        await executor.execute("memory_save", {"content": "Fixed auth bug"})
-        result = await executor.execute("memory_read", {"target": "daily"})
-        assert "Fixed auth bug" in result
-
-    async def test_memory_read_dates(self, memory_manager, tmp_path):
-        from agent.tools.builtin.memory_tool import MemorySaveTool, MemoryReadTool
-        from datetime import date
-
-        registry = ToolRegistry()
-        registry.register(MemorySaveTool(memory_manager))
-        registry.register(MemoryReadTool(memory_manager))
-        executor = ToolExecutor(registry)
-
-        await executor.execute("memory_save", {"content": "note"})
-        result = await executor.execute("memory_read", {"target": "dates"})
-        assert date.today().isoformat() in result
-
-    async def test_memory_search_no_results(self, memory_manager, tmp_path):
+    async def test_memory_search_no_mem0(self, memory_manager, tmp_path):
         from agent.tools.builtin.memory_tool import MemorySearchTool
 
         registry = ToolRegistry()
         registry.register(MemorySearchTool(memory_manager))
         executor = ToolExecutor(registry)
 
-        result = await executor.execute("memory_search", {"query": "nonexistent_xyz"})
+        result = await executor.execute("memory_search", {"query": "anything"})
         assert "No matching" in result

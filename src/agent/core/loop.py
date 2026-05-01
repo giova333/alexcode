@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # Shortcuts for /model command — maps aliases to full model IDs
 MODEL_ALIASES: dict[str, str] = {
     # Current generation
-    "opus": "claude-opus-4-6",
+    "opus": "claude-opus-4-7",
     "sonnet": "claude-sonnet-4-6",
     "haiku": "claude-haiku-4-5-20251001",
     # Previous generations
@@ -69,7 +69,8 @@ class AgentLoop:
         self._llm = llm
         self._cli = cli
         self._project_dir = project_dir
-        self._conversation = Conversation()
+        on_append = memory_manager.handle_message_appended if memory_manager else None
+        self._conversation = Conversation(on_append=on_append)
         self._tool_registry = tool_registry
         self._tool_executor = tool_executor
         self._memory_manager = memory_manager
@@ -83,7 +84,6 @@ class AgentLoop:
         self._compactor = Compactor(
             config.compaction,
             llm,
-            memory_manager,
             self._conversation,
         )
 
@@ -528,24 +528,3 @@ Use the `plan` tool again if you need to revise the plan.
     def _save_history(self) -> None:
         if self._history and self._conversation.messages:
             self._history.save(self._session_id, self._conversation.messages)
-
-            # Index this session for future memory search
-            if self._memory_manager:
-                try:
-                    text_parts = []
-                    for msg in self._conversation.messages:
-                        if msg.text:
-                            text_parts.append(f"[{msg.role}]: {msg.text}")
-                        elif isinstance(msg.content, list):
-                            for block in msg.content:
-                                if block.get("type") == "tool_use":
-                                    text_parts.append(f"[assistant]: Called {block['name']}")
-                                elif block.get("type") == "tool_result":
-                                    preview = str(block.get("content", ""))[:500]
-                                    text_parts.append(f"[tool_result]: {preview}")
-                    if text_parts:
-                        self._memory_manager.index_session(
-                            "\n\n".join(text_parts), self._session_id
-                        )
-                except Exception:
-                    pass  # indexing is best-effort

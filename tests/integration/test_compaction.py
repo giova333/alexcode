@@ -59,28 +59,26 @@ def _tool_use_msg(tool_id: str, tool_name: str, tokens: int = 50) -> Message:
 class TestCompactionTrigger:
     """Compaction should only run when token threshold is exceeded."""
 
-    async def test_no_compaction_below_threshold(self, fake_llm, memory_manager):
+    async def test_no_compaction_below_threshold(self, fake_llm):
         config = CompactionConfig(threshold_tokens=1000, keep_recent_messages=4)
         conv = _make_conversation(
             [_user_msg("hi"), _assistant_msg("hello")],
             total_tokens=500,
         )
-        compactor = Compactor(config, fake_llm, memory_manager, conv)
+        compactor = Compactor(config, fake_llm, conv)
 
         result = await compactor.maybe_compact()
         assert result is False
 
-    async def test_compaction_above_threshold(self, fake_llm, memory_manager):
+    async def test_compaction_above_threshold(self, fake_llm):
         config = CompactionConfig(threshold_tokens=100, keep_recent_messages=2)
         msgs = [_user_msg(f"msg {i}", tokens=50) for i in range(10)]
         msgs += [_assistant_msg(f"reply {i}", tokens=50) for i in range(10)]
         conv = _make_conversation(msgs, total_tokens=1000)
 
-        # Fake LLM needs to return text for extract + summarize calls
-        fake_llm.set_text_response("extracted info")
         fake_llm.set_text_response("summary of conversation")
 
-        compactor = Compactor(config, fake_llm, memory_manager, conv)
+        compactor = Compactor(config, fake_llm, conv)
         result = await compactor.maybe_compact()
 
         assert result is True
@@ -89,15 +87,14 @@ class TestCompactionTrigger:
         # Token count should be recalculated and reduced
         assert conv.total_tokens < 1000
 
-    async def test_force_compaction(self, fake_llm, memory_manager):
+    async def test_force_compaction(self, fake_llm):
         config = CompactionConfig(threshold_tokens=999999, keep_recent_messages=2)
         msgs = [_user_msg("a"), _assistant_msg("b"), _user_msg("c"), _assistant_msg("d")]
         conv = _make_conversation(msgs, total_tokens=10)
 
-        fake_llm.set_text_response("extracted")
         fake_llm.set_text_response("summary")
 
-        compactor = Compactor(config, fake_llm, memory_manager, conv)
+        compactor = Compactor(config, fake_llm, conv)
         result = await compactor.maybe_compact(force=True)
 
         assert result is True
@@ -107,7 +104,7 @@ class TestCompactionTrigger:
 class TestCompactionSummarization:
     """Old messages are replaced by a summary, recent messages kept."""
 
-    async def test_keeps_recent_messages(self, fake_llm, memory_manager):
+    async def test_keeps_recent_messages(self, fake_llm):
         config = CompactionConfig(threshold_tokens=100, keep_recent_messages=2)
         msgs = [
             _user_msg("old 1"), _assistant_msg("old reply 1"),
@@ -116,10 +113,9 @@ class TestCompactionSummarization:
         ]
         conv = _make_conversation(msgs, total_tokens=1000)
 
-        fake_llm.set_text_response("extracted facts")
         fake_llm.set_text_response("Conversation summary here")
 
-        compactor = Compactor(config, fake_llm, memory_manager, conv)
+        compactor = Compactor(config, fake_llm, conv)
         await compactor.maybe_compact()
 
         # First message should be the summary
@@ -128,7 +124,7 @@ class TestCompactionSummarization:
         # Recent messages preserved
         assert conv.messages[-1].text == "recent reply 1"
 
-    async def test_tool_pair_not_split(self, fake_llm, memory_manager):
+    async def test_tool_pair_not_split(self, fake_llm):
         """Compaction should not separate tool_use from its tool_result."""
         config = CompactionConfig(threshold_tokens=100, keep_recent_messages=2)
         msgs = [
@@ -140,10 +136,9 @@ class TestCompactionSummarization:
         ]
         conv = _make_conversation(msgs, total_tokens=1000)
 
-        fake_llm.set_text_response("extracted")
         fake_llm.set_text_response("summary")
 
-        compactor = Compactor(config, fake_llm, memory_manager, conv)
+        compactor = Compactor(config, fake_llm, conv)
         await compactor.maybe_compact()
 
         # No orphaned tool_result should exist
@@ -162,7 +157,7 @@ class TestCompactionSummarization:
 class TestToolResultTruncation:
     """Large tool results get truncated during compaction."""
 
-    async def test_large_tool_result_truncated(self, fake_llm, memory_manager):
+    async def test_large_tool_result_truncated(self, fake_llm):
         config = CompactionConfig(threshold_tokens=100, keep_recent_messages=10)
         # Create a message with a huge tool result
         huge_content = "x" * 50000  # Way over _MAX_TOOL_RESULT_TOKENS
@@ -172,10 +167,7 @@ class TestToolResultTruncation:
         ]
         conv = _make_conversation(msgs, total_tokens=10000)
 
-        fake_llm.set_text_response("extracted")
-        # No summarize call needed (only 2 messages <= keep_recent)
-
-        compactor = Compactor(config, fake_llm, memory_manager, conv)
+        compactor = Compactor(config, fake_llm, conv)
         await compactor.maybe_compact(force=True)
 
         # The tool result should be truncated
@@ -187,27 +179,3 @@ class TestToolResultTruncation:
         msg = _tool_result_msg("t1", "short result")
         result = Compactor._truncate_tool_results(msg)
         assert result.content[0]["content"] == "short result"
-
-
-@pytest.mark.integration
-class TestCompactionMemoryFlush:
-    """Compaction extracts key info and saves to daily memory."""
-
-    async def test_flush_saves_to_daily(self, fake_llm, memory_manager, tmp_path):
-        config = CompactionConfig(threshold_tokens=100, keep_recent_messages=2)
-        msgs = [
-            _user_msg("fix the auth bug"),
-            _assistant_msg("Fixed auth.py line 42"),
-            _user_msg("thanks"), _assistant_msg("welcome"),
-        ]
-        conv = _make_conversation(msgs, total_tokens=1000)
-
-        fake_llm.set_text_response("Key fact: fixed auth bug in auth.py")
-        fake_llm.set_text_response("Summary: fixed auth bug")
-
-        compactor = Compactor(config, fake_llm, memory_manager, conv)
-        await compactor.maybe_compact()
-
-        # Daily notes should contain the extracted info
-        daily_content = await memory_manager.read_daily()
-        assert "auth" in daily_content.lower() or "Key fact" in daily_content

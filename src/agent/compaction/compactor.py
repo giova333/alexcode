@@ -1,4 +1,4 @@
-"""Conversation compaction: flush to memory, summarize old messages."""
+"""Conversation compaction: summarize old messages and truncate oversized tool results."""
 
 from __future__ import annotations
 
@@ -10,23 +10,11 @@ from agent.core.conversation import Conversation
 from agent.core.message import Message
 from agent.core.tokens import count_message_tokens, count_tokens
 from agent.llm.base import LLMProvider, TextDelta
-from agent.memory.manager import MemoryManager
 
 # Maximum tokens allowed for a single tool_result content block after compaction.
 # Larger results get truncated to a preview to keep the context window manageable.
 _MAX_TOOL_RESULT_TOKENS = 800
 
-
-EXTRACT_PROMPT = """\
-Analyze this conversation and extract the most important information that should be \
-remembered for future conversations. Include:
-- Key decisions made
-- Important facts about the project or codebase
-- User preferences discovered
-- Problems solved and their solutions
-- File paths and code patterns mentioned
-
-Format as concise markdown bullet points. Only include genuinely important information."""
 
 SUMMARIZE_PROMPT = """\
 Summarize this conversation concisely. Preserve:
@@ -45,12 +33,10 @@ class Compactor:
         self,
         config: CompactionConfig,
         llm: LLMProvider,
-        memory_manager: MemoryManager | None,
         conversation: Conversation,
     ) -> None:
         self._config = config
         self._llm = llm
-        self._memory = memory_manager
         self._conversation = conversation
 
     async def maybe_compact(self, force: bool = False) -> bool:
@@ -58,25 +44,11 @@ class Compactor:
         if not force and self._conversation.total_tokens < self._config.threshold_tokens:
             return False
 
-        await self._flush_to_memory()
         await self._summarize_old_messages()
         # Always truncate oversized tool results, even when there are too few
         # messages to summarize (e.g. a few messages with huge Glean results).
         self._truncate_all_tool_results()
         return True
-
-    async def _flush_to_memory(self) -> None:
-        """Ask LLM to extract key info, write to memory."""
-        if not self._memory:
-            return
-
-        # Build a condensed version of the conversation for extraction
-        conversation_text = self._format_conversation(self._conversation.messages)
-        extract_messages = [{"role": "user", "content": f"{EXTRACT_PROMPT}\n\n{conversation_text}"}]
-
-        extracted = await self._call_llm_simple(extract_messages)
-        if extracted:
-            await self._memory.save_daily(f"Compaction extracted:\n{extracted}")
 
     async def _summarize_old_messages(self) -> None:
         """Keep recent messages, summarize older ones."""

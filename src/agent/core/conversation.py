@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from agent.core.message import Message
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -14,10 +17,16 @@ class Conversation:
     messages: list[Message] = field(default_factory=list)
     system_prompt: str = ""
     total_tokens: int = 0
+    on_append: Callable[[Message], None] | None = None
 
     def append(self, message: Message) -> None:
         self.messages.append(message)
         self.total_tokens += message.token_count
+        if self.on_append is not None:
+            try:
+                self.on_append(message)
+            except Exception as e:
+                logger.debug("Conversation.on_append failed: %s", e)
 
     def to_api_messages(self) -> list[dict[str, Any]]:
         """Convert messages to the format expected by LLM APIs."""

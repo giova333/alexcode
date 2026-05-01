@@ -92,8 +92,13 @@ class TestDictToConfig:
             "anthropic": {"api_key": "test"},
             "reasoning": {"enabled": True, "effort": "medium"},
             "compaction": {"threshold_tokens": 50000},
-            "memory": {"enabled": False},
-            "embedding": {"enabled": True, "chunk_size": 256},
+            "memory": {"enabled": False, "scope": "project"},
+            "mem0": {
+                "enabled": True,
+                "project_store_dir": ".agent/mem0/proj/",
+                "llm": {"provider": "anthropic", "model": "claude-haiku-4-5", "api_key": "k"},
+                "embedder": {"provider": "openai", "model": "text-embedding-3-small", "api_key": "e"},
+            },
         }
         config = _dict_to_config(data)
         assert config.model == "claude-opus-4-6"
@@ -103,7 +108,11 @@ class TestDictToConfig:
         assert config.reasoning.effort == "medium"
         assert config.compaction.threshold_tokens == 50000
         assert config.memory.enabled is False
-        assert config.embedding.chunk_size == 256
+        assert config.memory.scope == "project"
+        assert config.mem0.enabled is True
+        assert config.mem0.project_store_dir == ".agent/mem0/proj/"
+        assert config.mem0.llm.model == "claude-haiku-4-5"
+        assert config.mem0.embedder.api_key == "e"
 
 
 @pytest.mark.integration

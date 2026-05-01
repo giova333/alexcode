@@ -51,26 +51,36 @@ class CompactionConfig:
 @dataclass
 class MemoryConfig:
     enabled: bool = True
-    memory_file: str = ".agent/memory/MEMORY.md"
-    daily_dir: str = ".agent/memory/daily/"
-    context_days: int = 2          # days of daily notes to include in system prompt
-    index_on_startup: bool = True  # index memory + recent history on startup
+    memory_file: str = "~/.config/agent/MEMORY.md"
+    scope: str = "global"  # "global" (cross-project) or "project" (this project only)
 
 
 @dataclass
-class EmbeddingConfig:
-    enabled: bool = False
-    model: str = "all-MiniLM-L6-v2"
-    db_path: str = ".agent/embeddings.db"
-    hybrid_alpha: float = 0.7
-    chunk_size: int = 512
-    chunk_overlap: int = 50
+class Mem0LLMConfig:
+    provider: str = "anthropic"
+    model: str = "claude-haiku-4-5"
+    api_key: str = ""
+
+
+@dataclass
+class Mem0EmbedderConfig:
+    provider: str = "openai"
+    model: str = "text-embedding-3-small"
+    api_key: str = ""
+
+
+@dataclass
+class Mem0Config:
+    enabled: bool = True
+    project_store_dir: str = ".agent/mem0/project/"
+    global_store_dir: str = "~/.config/agent/mem0/global/"
+    llm: Mem0LLMConfig = field(default_factory=Mem0LLMConfig)
+    embedder: Mem0EmbedderConfig = field(default_factory=Mem0EmbedderConfig)
 
 
 @dataclass
 class HistoryConfig:
     dir: str = ".agent/history/"
-    index_enabled: bool = True
 
 
 @dataclass
@@ -109,7 +119,7 @@ class Config:
     reasoning: ReasoningConfig = field(default_factory=ReasoningConfig)
     compaction: CompactionConfig = field(default_factory=CompactionConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
-    embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
+    mem0: Mem0Config = field(default_factory=Mem0Config)
     history: HistoryConfig = field(default_factory=HistoryConfig)
     skills: SkillsConfig = field(default_factory=SkillsConfig)
     tools: ToolsConfig = field(default_factory=ToolsConfig)
@@ -201,6 +211,17 @@ def _deep_merge(base: dict, override: dict) -> None:
             base[key] = value
 
 
+def _build_mem0_config(data: dict) -> Mem0Config:
+    """Build Mem0Config handling nested LLM/embedder sub-configs."""
+    return Mem0Config(
+        enabled=data.get("enabled", True),
+        project_store_dir=data.get("project_store_dir", ".agent/mem0/project/"),
+        global_store_dir=data.get("global_store_dir", "~/.config/agent/mem0/global/"),
+        llm=Mem0LLMConfig(**data.get("llm", {})),
+        embedder=Mem0EmbedderConfig(**data.get("embedder", {})),
+    )
+
+
 def _build_tools_config(data: dict) -> ToolsConfig:
     """Build ToolsConfig handling nested sub-configs."""
     return ToolsConfig(
@@ -223,7 +244,7 @@ def _dict_to_config(data: dict) -> Config:
         reasoning=ReasoningConfig(**data.get("reasoning", {})),
         compaction=CompactionConfig(**data.get("compaction", {})),
         memory=MemoryConfig(**data.get("memory", {})),
-        embedding=EmbeddingConfig(**data.get("embedding", {})),
+        mem0=_build_mem0_config(data.get("mem0", {})),
         history=HistoryConfig(**data.get("history", {})),
         skills=SkillsConfig(**data.get("skills", {})),
         tools=_build_tools_config(data.get("tools", {})),
