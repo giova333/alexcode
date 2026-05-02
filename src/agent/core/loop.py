@@ -69,8 +69,7 @@ class AgentLoop:
         self._llm = llm
         self._cli = cli
         self._project_dir = project_dir
-        on_append = memory_manager.handle_message_appended if memory_manager else None
-        self._conversation = Conversation(on_append=on_append)
+        self._conversation = Conversation()
         self._tool_registry = tool_registry
         self._tool_executor = tool_executor
         self._memory_manager = memory_manager
@@ -329,11 +328,18 @@ class AgentLoop:
 
         await self._maybe_compact()
 
-        await self._run_llm_cycle()
+        assistant_msgs = await self._run_llm_cycle()
+        if self._memory_manager:
+            self._memory_manager.ingest_turn(user_msg, assistant_msgs)
         self._save_history()
 
-    async def _run_llm_cycle(self) -> None:
-        """Call LLM, handle tool use, repeat until text response."""
+    async def _run_llm_cycle(self) -> list[Message]:
+        """Call LLM, handle tool use, repeat until text response.
+
+        Returns the assistant messages produced during this cycle so the
+        caller can batch-ingest the full turn into long-term memory.
+        """
+        assistant_msgs: list[Message] = []
         while True:
             system = await self._build_system_prompt()
             tools = self._get_tool_definitions()
@@ -398,6 +404,7 @@ class AgentLoop:
                 assistant_msg = Message(role="assistant", content=content_blocks)
                 assistant_msg.token_count = count_message_tokens(assistant_msg.to_dict())
                 self._conversation.append(assistant_msg)
+                assistant_msgs.append(assistant_msg)
 
             if usage_info:
                 self._cli.print_usage(usage_info.usage.input_tokens, usage_info.usage.output_tokens)
@@ -408,7 +415,7 @@ class AgentLoop:
                 self._conversation.total_tokens = usage_info.usage.input_tokens
 
             if not tool_uses:
-                return
+                return assistant_msgs
 
             # Execute tools — always produce a tool_result for every tool_use
             # to keep the conversation valid for the Anthropic API.

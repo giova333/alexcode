@@ -8,9 +8,9 @@ import logging
 import os
 from pathlib import Path
 
-_LOG_LEVEL = os.environ.get("AGENT_LOG_LEVEL", "INFO").upper()
+_LOG_LEVEL = os.environ.get("AGENT_LOG_LEVEL", "ERROR").upper()
 logging.basicConfig(
-    level=getattr(logging, _LOG_LEVEL, logging.INFO),
+    level=getattr(logging, _LOG_LEVEL, logging.ERROR),
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     datefmt="%H:%M:%S",
 )

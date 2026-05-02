@@ -59,13 +59,13 @@ class MemoryManager:
             return []
         return await self._mem0.search(query, top_k=top_k)
 
-    # ── Live message hook (wired into Conversation.on_append) ──────────
+    # ── Per-turn ingestion (called from AgentLoop after each LLM cycle) ─
 
-    def handle_message_appended(self, message: Message) -> None:
-        """Forward user/assistant text messages to mem0 ingestion queue."""
+    def ingest_turn(self, user_msg: Message, assistant_msgs: list[Message]) -> None:
+        """Submit a full user→assistant turn to mem0 as a single batched add."""
         if self._mem0 is None:
             return
-        self._mem0.enqueue_message(message)
+        self._mem0.enqueue_turn([user_msg, *assistant_msgs])
 
     # ── Properties ─────────────────────────────────────────────────────
 

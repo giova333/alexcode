@@ -110,22 +110,33 @@ class Mem0Client:
 
     # ── Live ingestion ─────────────────────────────────────────────────
 
-    def enqueue_message(self, message: Message) -> None:
-        """Queue a message for ingestion. Filters non-text and non-user/assistant messages."""
-        if message.role not in ("user", "assistant"):
-            return
-        text = message.text.strip()
-        if not text:
+    def enqueue_turn(self, messages: list[Message]) -> None:
+        """Queue a full turn (user + assistant messages) for ingestion as one batch.
+
+        Filters out non-text and non-user/assistant blocks, then submits the
+        remaining payload to mem0 in a single ``add()`` call. Batching keeps
+        mem0's per-turn extraction LLM cost down vs ingesting each message
+        separately.
+        """
+        payloads: list[dict[str, str]] = []
+        for message in messages:
+            if message.role not in ("user", "assistant"):
+                continue
+            text = message.text.strip()
+            if not text:
+                continue
+            payloads.append({"role": message.role, "content": text})
+        if not payloads:
             return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            logger.debug("Mem0Client.enqueue_message called outside event loop; dropping")
+            logger.debug("Mem0Client.enqueue_turn called outside event loop; dropping")
             return
         if self._queue is None:
             self._queue = asyncio.Queue()
             self._worker_task = loop.create_task(self._worker())
-        self._queue.put_nowait({"role": message.role, "content": text})
+        self._queue.put_nowait(payloads)
 
     async def _worker(self) -> None:
         assert self._queue is not None
@@ -138,16 +149,19 @@ class Mem0Client:
             except Exception as e:
                 logger.warning("mem0 ingest failed (scope=%s): %s", self._scope, e)
 
-    async def _dispatch_add(self, payload: dict[str, Any]) -> None:
+    async def _dispatch_add(self, payloads: list[dict[str, Any]]) -> None:
         if not await self._ensure_init():
             return
-        preview = payload.get("content", "")[:80].replace("\n", " ")
-        logger.debug("mem0 ingest [%s]: %s", payload.get("role", "?"), preview)
-        await asyncio.to_thread(self._memory.add, [payload], user_id=self._user_id)
+        preview = " | ".join(
+            f"{p.get('role', '?')}: {p.get('content', '')[:60]}".replace("\n", " ")
+            for p in payloads
+        )
+        logger.debug("mem0 ingest turn (%d msgs): %s", len(payloads), preview)
+        await asyncio.to_thread(self._memory.add, payloads, user_id=self._user_id)
 
     def _search_kwargs(self, top_k: int) -> dict[str, Any]:
-        """mem0 v2 takes filters={'user_id': ...}; older versions take user_id=... directly."""
-        return {"filters": {"user_id": self._user_id}, "limit": top_k}
+        """mem0 v2 takes filters={'user_id': ...} and top_k=; older versions used user_id=, limit=."""
+        return {"filters": {"user_id": self._user_id}, "top_k": top_k}
 
     # ── Search ─────────────────────────────────────────────────────────
 

@@ -74,7 +74,7 @@ class TestMem0Client:
         from agent.memory.mem0_client import Mem0Client
 
         client = Mem0Client(_mem0_config(tmp_path), scope="project", project_dir=tmp_path)
-        client.enqueue_message(Message.user("hello"))
+        client.enqueue_turn([Message.user("hello"), Message.assistant("hi")])
         await client.aclose()
 
         mems = FakeMemory.instances
@@ -84,12 +84,13 @@ class TestMem0Client:
         msgs, user_id = mems[0].added[0]
         assert user_id == str(tmp_path.resolve())
         assert msgs[0]["content"] == "hello"
+        assert msgs[1]["content"] == "hi"
 
     async def test_global_scope_uses_global_user_id(self, patch_mem0, tmp_path):
         from agent.memory.mem0_client import Mem0Client
 
         client = Mem0Client(_mem0_config(tmp_path), scope="global", project_dir=tmp_path)
-        client.enqueue_message(Message.user("hello"))
+        client.enqueue_turn([Message.user("hello"), Message.assistant("hi")])
         await client.aclose()
 
         mems = FakeMemory.instances
@@ -104,19 +105,24 @@ class TestMem0Client:
         with pytest.raises(ValueError):
             Mem0Client(_mem0_config(tmp_path), scope="bogus", project_dir=tmp_path)
 
-    async def test_user_and_assistant_text_are_ingested(self, patch_mem0, tmp_path):
+    async def test_turn_is_batched_into_single_add_call(self, patch_mem0, tmp_path):
         from agent.memory.mem0_client import Mem0Client
 
         client = Mem0Client(_mem0_config(tmp_path), scope="global", project_dir=tmp_path)
-        client.enqueue_message(Message.user("hello world"))
-        client.enqueue_message(Message.assistant("hi back"))
+        client.enqueue_turn([
+            Message.user("hello world"),
+            Message.assistant("hi back"),
+        ])
         await client.aclose()
 
-        added = [msgs[0]["content"] for msgs, _ in FakeMemory.instances[0].added]
-        assert "hello world" in added
-        assert "hi back" in added
+        # One turn → one mem0.add() call carrying both messages.
+        added = FakeMemory.instances[0].added
+        assert len(added) == 1
+        msgs, _ = added[0]
+        contents = [m["content"] for m in msgs]
+        assert contents == ["hello world", "hi back"]
 
-    async def test_tool_results_and_empty_messages_are_skipped(self, patch_mem0, tmp_path):
+    async def test_tool_results_and_empty_messages_are_filtered(self, patch_mem0, tmp_path):
         from agent.memory.mem0_client import Mem0Client
 
         client = Mem0Client(_mem0_config(tmp_path), scope="global", project_dir=tmp_path)
@@ -128,13 +134,10 @@ class TestMem0Client:
         tool_result_msg = Message.tool_result("t1", "big output", is_error=False)
         blank_msg = Message.user("   ")
 
-        client.enqueue_message(tool_use_msg)
-        client.enqueue_message(tool_result_msg)
-        client.enqueue_message(blank_msg)
-
+        client.enqueue_turn([tool_use_msg, tool_result_msg, blank_msg])
         await client.aclose()
 
-        # Nothing was eligible for ingestion → no Memory was instantiated.
+        # All blocks were filtered → nothing was queued, no Memory built.
         if FakeMemory.instances:
             assert FakeMemory.instances[0].added == []
 
@@ -158,9 +161,9 @@ class TestMem0Client:
 
 
 @pytest.mark.integration
-class TestConversationHookIntegration:
+class TestMemoryManagerTurnIngestion:
 
-    async def test_conversation_append_forwards_user_text_to_mem0(self, patch_mem0, tmp_path):
+    async def test_ingest_turn_batches_user_and_assistant_into_one_add(self, patch_mem0, tmp_path):
         from agent.memory.mem0_client import Mem0Client
 
         mem0_client = Mem0Client(_mem0_config(tmp_path), scope="project", project_dir=tmp_path)
@@ -170,19 +173,28 @@ class TestConversationHookIntegration:
             mem0_client=mem0_client,
         )
 
-        conv = Conversation(on_append=mgr.handle_message_appended)
-        conv.append(Message.user("first message"))
-        conv.append(Message.assistant("first reply"))
-        conv.append(Message.tool_result("t1", "result", is_error=False))
+        user_msg = Message.user("first message")
+        assistant_msg = Message.assistant("first reply")
+        tool_use_msg = Message(
+            role="assistant",
+            content=[{"type": "tool_use", "id": "t1", "name": "x", "input": {}}],
+        )
+        tool_result_msg = Message.tool_result("t1", "result", is_error=False)
 
+        # Simulate a turn with an intermediate tool_use → tool_result → final reply.
+        mgr.ingest_turn(user_msg, [tool_use_msg, assistant_msg])
+        # Tool-result messages live in the conversation but are NOT part of an
+        # ingested turn — they're noise for memory extraction.
         await mem0_client.aclose()
 
-        contents = [msgs[0]["content"] for msgs, _ in FakeMemory.instances[0].added]
-        assert "first message" in contents
-        assert "first reply" in contents
+        added = FakeMemory.instances[0].added
+        assert len(added) == 1, "expected one batched mem0.add() per turn"
+        msgs, _ = added[0]
+        contents = [m["content"] for m in msgs]
+        assert contents == ["first message", "first reply"]
         assert "result" not in contents
 
-    async def test_load_messages_does_not_re_ingest(self, patch_mem0, tmp_path):
+    async def test_ingest_turn_with_no_text_is_a_noop(self, patch_mem0, tmp_path):
         from agent.memory.mem0_client import Mem0Client
 
         mem0_client = Mem0Client(_mem0_config(tmp_path), scope="global", project_dir=tmp_path)
@@ -192,9 +204,11 @@ class TestConversationHookIntegration:
             mem0_client=mem0_client,
         )
 
-        conv = Conversation(on_append=mgr.handle_message_appended)
-        conv.load_messages([Message.user("from history"), Message.assistant("old reply")])
-
+        # Empty user text + tool-only assistant message → nothing to ingest.
+        mgr.ingest_turn(
+            Message.user("   "),
+            [Message(role="assistant", content=[{"type": "tool_use", "id": "t", "name": "x", "input": {}}])],
+        )
         await asyncio.sleep(0)
         await mem0_client.aclose()
 

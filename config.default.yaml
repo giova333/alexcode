@@ -7,7 +7,7 @@ anthropic:
 
 reasoning:
   enabled: true
-  effort: high               # low, medium, high (adaptive thinking)
+  effort: xhigh               # low, medium, high (adaptive thinking)
   show_thinking: true        # Display thinking output in the terminal
 
 compaction:

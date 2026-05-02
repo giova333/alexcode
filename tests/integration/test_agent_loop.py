@@ -313,9 +313,9 @@ class TestCommandHandling:
 
         handled = await agent._handle_command("/model opus")
         assert handled is True
-        assert test_config.model == "claude-opus-4-6"
-        assert fake_llm._model == "claude-opus-4-6"
-        assert any("claude-opus-4-6" in o for o in fake_cli.output)
+        assert test_config.model == "claude-opus-4-7"
+        assert fake_llm._model == "claude-opus-4-7"
+        assert any("claude-opus-4-7" in o for o in fake_cli.output)
 
     async def test_model_command_custom_name(self, fake_llm, fake_cli, test_config, tmp_path):
         agent = build_agent(fake_llm, fake_cli, test_config, tmp_path)
