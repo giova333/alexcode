@@ -78,6 +78,7 @@ Type your message and press **Enter** to send. Use `\` at the end of a line for 
 | `/resume [id]` | Resume a previous conversation session |
 | `/compact` | Manually trigger conversation compaction |
 | `/model [name]` | Switch LLM model (supports aliases: `opus`, `sonnet`, `haiku`) |
+| `/effort [level]` | Set reasoning effort (`low`, `medium`, `high`, `xhigh`, `max`, `auto`) |
 | `/prompt` | Display the current system prompt |
 | `/plan` | Toggle plan mode on the main agent (read-only exploration) |
 | `/skills` | List all available skills |
@@ -109,7 +110,7 @@ The agent has two memory layers:
 
 1. **MEMORY.md** — a single human-curated file at `~/.config/agent/MEMORY.md` (user-scoped, shared across all projects). Auto-loaded into every system prompt. Use it for stable, long-term knowledge: project conventions, user preferences, architecture decisions. The `memory_save` tool appends to it; you can also edit it directly.
 
-2. **mem0** — automatic memory. Every user and assistant message is sent to a [mem0](https://mem0.ai) index in the background, where an LLM extracts and stores salient facts. The `memory_search` tool queries this index for recall across past sessions. Ingestion runs on an `asyncio` worker via `asyncio.to_thread`, so it never blocks the conversation.
+2. **mem0** — automatic memory. After each user→assistant turn, the full turn is batched into a single [mem0](https://mem0.ai) `add()` call in the background, where an LLM extracts and stores salient facts. The `memory_search` tool queries this index for recall across past sessions. Ingestion runs on an `asyncio` worker via `asyncio.to_thread`, so it never blocks the conversation.
 
 ### Scope
 

@@ -27,13 +27,7 @@ MODEL_ALIASES: dict[str, str] = {
     # Current generation
     "opus": "claude-opus-4-7",
     "sonnet": "claude-sonnet-4-6",
-    "haiku": "claude-haiku-4-5-20251001",
-    # Previous generations
-    "sonnet-4.5": "claude-sonnet-4-5-20250929",
-    "opus-4.5": "claude-opus-4-5-20251101",
-    "opus-4.1": "claude-opus-4-1-20250805",
-    "sonnet-4": "claude-sonnet-4-20250514",
-    "opus-4": "claude-opus-4-20250514",
+    "haiku": "claude-haiku-4-5-20251001"
 }
 
 
@@ -65,9 +59,12 @@ class AnthropicProvider:
         if tools:
             kwargs["tools"] = tools
 
-        # Adaptive thinking
+        # Adaptive thinking. On Opus 4.7+, thinking.display defaults to
+        # "omitted" (empty thinking field, signature-only) — we ask for
+        # summarized text whenever the user wants thinking surfaced.
         if reasoning and reasoning.enabled:
-            kwargs["thinking"] = {"type": "adaptive"}
+            display = "summarized" if reasoning.show_thinking else "omitted"
+            kwargs["thinking"] = {"type": "adaptive", "display": display}
             effort = reasoning.effort if reasoning.effort in VALID_EFFORTS else "high"
             if effort != "auto":
                 kwargs["output_config"] = {"effort": effort}

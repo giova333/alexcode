@@ -26,17 +26,17 @@ AgentLoop (core/loop.py)
     |         +---> ResponseComplete ---> Usage info
     |
     +---> Save history (JSONL)
-
-  Conversation.append (every message)
-        |
-        v
-  on_append callback ---> Mem0Client.enqueue_message ---> asyncio.Queue
-                                                              |
-                                                              v
-                                                   Background worker (asyncio.to_thread)
-                                                              |
-                                                              v
-                                                       mem0.Memory.add(...)
+    |
+    +---> MemoryManager.ingest_turn(user_msg, assistant_msgs)
+              |
+              v
+     Mem0Client.enqueue_turn ---> asyncio.Queue
+                                       |
+                                       v
+                            Background worker (asyncio.to_thread)
+                                       |
+                                       v
+                                mem0.Memory.add([...turn...], user_id=...)
 ```
 
 ### Initialization Flow (`__main__.py`)
@@ -53,7 +53,7 @@ AgentLoop (core/loop.py)
 10. Connect MCP servers + register MCP tools
 11. Register `PlanTool` (after MCP, so it can see MCP tools in parent registry)
 12. Discover skills
-13. Create `AgentLoop` with all components — wires `memory_manager.handle_message_appended` into `Conversation.on_append`
+13. Create `AgentLoop` with all components; per-turn memory ingestion is invoked from `_process_message` after each completed LLM cycle
 14. Resume session if `--resume` flag provided
 15. Run loop; on shutdown, drain `Mem0Client` worker via `aclose()`
 
@@ -150,14 +150,14 @@ Configs are deep-merged: nested keys from higher-precedence files override lower
 ```python
 Config
     provider: str = "anthropic"
-    model: str = "claude-sonnet-4-20250514"
+    model: str = "claude-opus-4-7"
     max_tokens: int = 8192
     prompts_dir: str = "prompts/"
     anthropic: AnthropicConfig
         api_key: str = "${ANTHROPIC_API_KEY}"
     reasoning: ReasoningConfig
         enabled: bool = True
-        effort: str = "high"            # low, medium, high (adaptive thinking)
+        effort: str = "high"            # low, medium, high, xhigh, max, auto (adaptive thinking)
         show_thinking: bool = True
     compaction: CompactionConfig
         threshold_tokens: int = 80000
@@ -199,7 +199,7 @@ Config
 
 ```yaml
 provider: anthropic
-model: claude-sonnet-4-6
+model: claude-opus-4-7
 max_tokens: 8192
 prompts_dir: prompts/
 
@@ -208,7 +208,7 @@ anthropic:
 
 reasoning:
   enabled: true
-  effort: high               # low, medium, high (adaptive thinking)
+  effort: xhigh              # low, medium, high, xhigh, max, auto (adaptive thinking)
   show_thinking: true
 
 compaction:
@@ -280,7 +280,7 @@ class LLMProvider(Protocol):
 - Streaming: `messages.stream()` async context manager
 - Events processed: `content_block_start`, `content_block_delta`, `content_block_stop`
 - Tool use: accumulates `input_json_delta` chunks, parses JSON on `content_block_stop`
-- Adaptive thinking: sends `thinking.type = "adaptive"` with `output_config.effort` (`low`, `medium`, or `high`)
+- Adaptive thinking: sends `thinking.type = "adaptive"` with `output_config.effort` (`low`, `medium`, `high`, `xhigh`, `max`). Setting effort to `auto` omits `output_config` entirely so the API picks its own adaptive level.
 
 ### Message Format (`core/message.py`)
 
@@ -349,6 +349,7 @@ There is no iteration limit — the LLM cycle continues until the model produces
 | `/resume [id]` | Resume a previous session |
 | `/compact` | Manually trigger compaction |
 | `/model [name]` | Switch model (aliases: `opus`, `sonnet`, `haiku`, etc.) |
+| `/effort [level]` | Set reasoning effort (`low`, `medium`, `high`, `xhigh`, `max`, `auto`) |
 | `/prompt` | Display current system prompt |
 | `/plan` | Toggle plan mode (read-only + structured planning) |
 | `/skills` | List available skills |
@@ -488,7 +489,7 @@ Slim orchestrator — MEMORY.md I/O + delegate everything else to `Mem0Client`:
 | `save_main(content)` | Append to MEMORY.md. |
 | `read_main()` | Full MEMORY.md content. |
 | `search(query, top_k)` | Delegate to `Mem0Client.search`; `[]` if no client. |
-| `handle_message_appended(message)` | Wired into `Conversation.on_append`; delegates to `Mem0Client.enqueue_message`. |
+| `ingest_turn(user_msg, assistant_msgs)` | Called from `AgentLoop._process_message` after each LLM cycle; delegates to `Mem0Client.enqueue_turn`. |
 
 ### Mem0 Client (`memory/mem0_client.py`)
 
@@ -498,7 +499,7 @@ Owns one `mem0.Memory` instance, one `user_id`, and a background ingestion worke
 class Mem0Client:
     def __init__(self, config: Mem0Config, scope: str, project_dir: Path) -> None: ...
 
-    def enqueue_message(self, message: Message) -> None
+    def enqueue_turn(self, messages: list[Message]) -> None
     async def search(self, query: str, top_k: int = 10) -> list[dict]
     async def aclose(self) -> None
 ```
@@ -513,20 +514,21 @@ class Mem0Client:
 **Auto-ingestion path:**
 
 ```
-Conversation.append(msg)
-    -> on_append callback -> MemoryManager.handle_message_appended
-    -> Mem0Client.enqueue_message
+AgentLoop._process_message
+    -> _run_llm_cycle  (returns assistant_msgs for this turn)
+    -> MemoryManager.ingest_turn(user_msg, assistant_msgs)
+    -> Mem0Client.enqueue_turn([user_msg, *assistant_msgs])
         - filter: skip non-user/assistant roles, non-text blocks, empty text
-        - asyncio.Queue.put_nowait
+        - asyncio.Queue.put_nowait (single batched payload per turn)
         - lazy-start a background asyncio task on first call
 
 Background worker:
     -> asyncio.Queue.get
     -> Mem0Client._ensure_init  (asyncio.to_thread on first call)
-    -> mem0.Memory.add(messages, user_id=...)  (asyncio.to_thread)
+    -> mem0.Memory.add(payloads, user_id=...)  (asyncio.to_thread)
 ```
 
-`Conversation.append` never blocks on I/O. `load_messages` and `clear` deliberately skip the `on_append` callback (resuming a session must not re-ingest history).
+Ingestion is batched per turn (one `mem0.add()` per user→assistant turn instead of per message), which cuts mem0's extraction LLM cost. Resumed sessions don't re-ingest history because ingestion is driven by `_process_message` — `load_messages` only replays state, it doesn't drive a new turn.
 
 ### mem0 v2 API quirks
 
@@ -540,7 +542,7 @@ Background worker:
 - `INFO` `mem0 ready: scope=…, user_id=…, store=…` once on first successful init.
 - `INFO` `mem0 search (scope=…) query=… → N hit(s)` per search call.
 - `WARNING` on init / ingest / search failure with a hint about `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and `chromadb`.
-- `DEBUG` `mem0 ingest [role]: <preview>` per ingested message.
+- `DEBUG` `mem0 ingest turn (N msgs): <preview>` per ingested turn.
 
 The default level is `ERROR` (only failures surface). Set `AGENT_LOG_LEVEL=WARNING` for non-fatal mem0 problems, `=INFO` to add init confirmations and search hit counts, or `=DEBUG` for per-message ingest logs and full third-party output.
 
@@ -699,16 +701,15 @@ Conversation(
     messages: list[Message],
     system_prompt: str,
     total_tokens: int,
-    on_append: Callable[[Message], None] | None = None,
 )
 ```
 
-- `append(message)` — adds message, updates token count, fires `on_append(message)` if set. Callback exceptions are swallowed at `DEBUG` so memory failures never crash the agent loop.
-- `load_messages(messages)` — replaces the message list (used by `/resume`); **deliberately does not fire `on_append`** so resumed history isn't re-ingested.
-- `clear()` — resets state; also skips `on_append`.
+- `append(message)` — adds message, updates token count.
+- `load_messages(messages)` — replaces the message list (used by `/resume`), running `sanitize_tool_pairs` to fix orphaned `tool_result` blocks left over from compaction.
+- `clear()` — resets state.
 - `to_api_messages()` — converts to LLM API format.
 
-`AgentLoop.__init__` sets `on_append=memory_manager.handle_message_appended` so every appended message — from user input, assistant streaming, and tool results — flows into the mem0 ingestion queue. Tool-related blocks are filtered inside `Mem0Client.enqueue_message` (only `role in {user, assistant}` AND text content survives).
+mem0 ingestion is decoupled from `Conversation` itself — `AgentLoop._process_message` calls `MemoryManager.ingest_turn(user_msg, assistant_msgs)` after each completed LLM cycle, batching the full turn into a single `mem0.add()` call. Tool-use and tool-result blocks are filtered inside `Mem0Client.enqueue_turn` (only `role in {user, assistant}` AND non-empty text survives), so resumed history is never re-ingested.
 
 ### History Persistence (`history/storage.py`)
 
@@ -720,7 +721,7 @@ Conversation(
 - `list_sessions()` returns newest-first with message counts
 - `find_session()` / `get_latest_session_id()` for session resume
 
-mem0 ingestion is decoupled from history persistence — it happens at append time, not save time, so the conversation is searchable as soon as the message lands.
+mem0 ingestion is decoupled from history persistence — it runs in `_process_message` after each LLM cycle (per turn), independent of when the JSONL session file is rewritten.
 
 ---
 
@@ -776,7 +777,7 @@ Terminal interface built on Rich (rendering) and prompt_toolkit (input):
 
 3. **Two-layer memory** — MEMORY.md (curated, user-scoped, in the system prompt) handles facts the user wants pinned forever; mem0 (automatic, scoped per `memory.scope`, queried via `memory_search`) handles the rolling conversational record. The split keeps the system prompt small while making everything searchable.
 
-4. **Auto-ingest via `Conversation.on_append`** — every appended message flows through a single hook, then through a background `asyncio.Queue` worker draining `mem0.Memory.add` via `asyncio.to_thread`. Zero effort for the model and zero added latency for the user. Filtering at enqueue keeps tool noise out.
+4. **Per-turn batched mem0 ingestion** — `AgentLoop._process_message` calls `MemoryManager.ingest_turn(...)` after each completed LLM cycle, submitting the full user→assistant turn as one `mem0.add()` payload via a background `asyncio.Queue` worker (`asyncio.to_thread`). Batching per turn (vs. per message) cuts mem0's extraction LLM cost and keeps tool noise out of the index.
 
 5. **Single mem0 scope (`global` or `project`)** — one `Memory` instance, one `user_id`, one vector store. Half the LLM extraction cost vs. dual-write, and a clearer privacy story. Default `global` because cross-project recall is the common case for a personal assistant.
 
@@ -790,4 +791,4 @@ Terminal interface built on Rich (rendering) and prompt_toolkit (input):
 
 10. **Plan via conversation history** — the `plan` tool emits its plan as a tool result and persists a copy to disk. The agent follows the plan from conversation history on subsequent turns rather than re-injecting it into the system prompt every cycle. The `/plan` toggle is a complementary read-only restriction for the main agent during exploration.
 
-11. **Adaptive thinking** — replaces fixed-budget extended thinking with adaptive mode (`low`/`medium`/`high` effort), letting the model decide how much reasoning to use.
+11. **Adaptive thinking** — replaces fixed-budget extended thinking with adaptive mode. Effort levels (`low`/`medium`/`high`/`xhigh`/`max`) bias `output_config.effort`; `auto` omits `output_config` so the API picks its own adaptive level. The `/effort` command lets the user retune at runtime.
