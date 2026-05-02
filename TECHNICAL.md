@@ -14,9 +14,9 @@ AgentLoop (core/loop.py)
     |
     +---> Check compaction threshold
     |         |
-    |         +---> Compactor: flush facts to memory + summarize old messages
+    |         +---> Compactor: summarize old messages + truncate oversized tool results
     |
-    +---> Build system prompt (SYSTEM.md + AGENTS.md + memory context + skill metadata + active plan)
+    +---> Build system prompt (SYSTEM.md + AGENTS.md + MEMORY.md + skill metadata + plan-mode block if toggled)
     |
     +---> Stream LLM response (Anthropic)
     |         |
@@ -25,26 +25,37 @@ AgentLoop (core/loop.py)
     |         +---> ToolUseEvent ---> Execute tool ---> Append result ---> Loop back
     |         +---> ResponseComplete ---> Usage info
     |
-    +---> Save history + index for search
+    +---> Save history (JSONL)
+
+  Conversation.append (every message)
+        |
+        v
+  on_append callback ---> Mem0Client.enqueue_message ---> asyncio.Queue
+                                                              |
+                                                              v
+                                                   Background worker (asyncio.to_thread)
+                                                              |
+                                                              v
+                                                       mem0.Memory.add(...)
 ```
 
 ### Initialization Flow (`__main__.py`)
 
-1. Parse CLI args (`--model`, `--resume`)
-2. Load config: `config.default.yaml` -> project `config.yaml` -> user `~/.config/agent/config.yaml`
-3. Override with CLI args
-4. Create LLM provider (Anthropic)
-5. Initialize CLI (Rich console + prompt_toolkit)
-6. Create `MemoryManager` (if enabled)
-7. Create `ToolRegistry` + register built-in tools (including `web_fetch`, `web_search`)
-8. Register `SubagentTool` (after builtins, so clone captures all tools)
-9. Connect MCP servers + register MCP tools
-10. Register `PlanTool` (after MCP, so it can see MCP tools in parent registry)
-11. Index memory + history (if `index_on_startup: true`)
+1. Configure logging (level from `AGENT_LOG_LEVEL`, defaults to `ERROR`; tamps down noisy third-party loggers)
+2. Parse CLI args (`--model`, `--resume`)
+3. Load config: `config.default.yaml` -> project `config.yaml` -> user `~/.config/agent/config.yaml`
+4. Override with CLI args
+5. Create LLM provider (Anthropic)
+6. Initialize CLI (Rich console + prompt_toolkit)
+7. Create `Mem0Client` and `MemoryManager` (if `memory.enabled` and `mem0.enabled`); `Mem0Client` failures are non-fatal
+8. Create `ToolRegistry` + register built-in tools (including `web_fetch`, `web_search`)
+9. Register `SubagentTool` (after builtins, so clone captures all tools)
+10. Connect MCP servers + register MCP tools
+11. Register `PlanTool` (after MCP, so it can see MCP tools in parent registry)
 12. Discover skills
-13. Create `AgentLoop` with all components
+13. Create `AgentLoop` with all components — wires `memory_manager.handle_message_appended` into `Conversation.on_append`
 14. Resume session if `--resume` flag provided
-15. Run loop
+15. Run loop; on shutdown, drain `Mem0Client` worker via `aclose()`
 
 ---
 
@@ -89,13 +100,9 @@ src/agent/
         __init__.py
         runner.py           # Isolated LLM cycle for sub-agent execution
     memory/
-        manager.py          # Memory orchestrator (load, save, search, index)
-        files.py            # MEMORY.md file I/O
-        daily.py            # Daily notes (memory/daily/YYYY-MM-DD.md)
-    embedding/
-        indexer.py          # Text chunking + embedding generation
-        store.py            # SQLite storage for embeddings + content hashes
-        search.py           # Hybrid semantic + BM25 search
+        manager.py          # Orchestrator: MEMORY.md I/O + delegate search/ingest to Mem0Client
+        files.py            # MEMORY.md file I/O (expands ~ / abs paths)
+        mem0_client.py      # mem0 wrapper: lazy init, async ingestion queue, search
     skills/
         skill.py            # Skill data model, rendering, arg substitution
         loader.py           # Skill discovery + YAML frontmatter parsing
@@ -108,12 +115,17 @@ prompts/
     SYSTEM.md               # Base system prompt
     PLAN.md                 # Plan mode system prompt (read-only exploration)
 
-.agent/
+.agent/                     # Per-project state (created on first run)
     mcp.json                # MCP server config (Claude Code format)
-    plans/                  # Session plan files (<session_id>.json)
-    memory/
-        MEMORY.md           # Main long-term knowledge
-        daily/              # Daily notes (YYYY-MM-DD.md)
+    plans/                  # Session plan files (<session_id>.md)
+    history/                # JSONL session logs
+    mem0/project/           # Chroma vector store (only when memory.scope == "project")
+
+~/.config/agent/            # User-scoped state (created on first run)
+    config.yaml             # Optional user override
+    MEMORY.md               # Curated long-term knowledge (auto-loaded into system prompt)
+    input_history           # prompt_toolkit input history
+    mem0/global/            # Chroma vector store (only when memory.scope == "global", the default)
 
 AGENTS.md                   # Project-level agent instructions (loaded into system prompt)
 config.default.yaml         # Bundled defaults
@@ -152,17 +164,20 @@ Config
         keep_recent_messages: int = 10
     memory: MemoryConfig
         enabled: bool = True
-        memory_file: str = ".agent/memory/MEMORY.md"
-        daily_dir: str = ".agent/memory/daily/"
-        context_days: int = 2
-        index_on_startup: bool = True
-    embedding: EmbeddingConfig
+        memory_file: str = "~/.config/agent/MEMORY.md"
+        scope: str = "global"           # "global" or "project"
+    mem0: Mem0Config
         enabled: bool = True
-        model: str = "all-MiniLM-L6-v2"
-        db_path: str = ".agent/embeddings.db"
-        hybrid_alpha: float = 0.7      # 0=BM25, 1=semantic
-        chunk_size: int = 512           # words per chunk
-        chunk_overlap: int = 50         # word overlap
+        project_store_dir: str = ".agent/mem0/project/"
+        global_store_dir: str = "~/.config/agent/mem0/global/"
+        llm: Mem0LLMConfig
+            provider: str = "anthropic"
+            model: str = "claude-haiku-4-5"
+            api_key: str = "${ANTHROPIC_API_KEY}"
+        embedder: Mem0EmbedderConfig
+            provider: str = "openai"
+            model: str = "text-embedding-3-small"
+            api_key: str = "${OPENAI_API_KEY}"
     history: HistoryConfig
         dir: str = ".agent/history/"
     skills: SkillsConfig
@@ -202,18 +217,21 @@ compaction:
 
 memory:
   enabled: true
-  memory_file: .agent/memory/MEMORY.md
-  daily_dir: .agent/memory/daily/
-  context_days: 2
-  index_on_startup: true
+  memory_file: ~/.config/agent/MEMORY.md   # user-scoped; one file across all projects
+  scope: global                            # "global" (cross-project) or "project" (this project only)
 
-embedding:
+mem0:
   enabled: true
-  model: all-MiniLM-L6-v2
-  db_path: .agent/embeddings.db
-  hybrid_alpha: 0.7
-  chunk_size: 512
-  chunk_overlap: 50
+  project_store_dir: .agent/mem0/project/
+  global_store_dir: ~/.config/agent/mem0/global/
+  llm:
+    provider: anthropic
+    model: claude-haiku-4-5
+    api_key: "${ANTHROPIC_API_KEY}"
+  embedder:
+    provider: openai
+    model: text-embedding-3-small
+    api_key: "${OPENAI_API_KEY}"
 
 history:
   dir: .agent/history/
@@ -304,8 +322,8 @@ Message(
 
 The core loop that drives agentic behavior:
 
-1. Build system prompt: `SYSTEM.md` + `AGENTS.md` + memory context + skill metadata + active plan
-2. Get tool definitions from registry (filtered in plan mode)
+1. Build system prompt: `SYSTEM.md` + `AGENTS.md` + memory context + skill metadata + plan-mode block (if `/plan` is toggled)
+2. Get tool definitions from registry
 3. Stream LLM response
 4. Collect text blocks and tool use events
 5. Build assistant message from collected blocks
@@ -345,21 +363,17 @@ There is no iteration limit — the LLM cycle continues until the model produces
 [AGENTS.md content (if present)]
 
 # Memory
-[MEMORY.md content]
-
-## Notes — 2026-03-09
-[Today's daily notes]
-
-## Notes — 2026-03-08
-[Yesterday's daily notes]
+[MEMORY.md content — read fresh from ~/.config/agent/MEMORY.md on every turn]
 
 # Available Skills
 - skill-name: Description for LLM discovery
 - another-skill: Another description
 
-# Active Plan
-[Markdown checkbox plan with edit instructions — only if plan file exists with unchecked items]
+# Plan Mode
+[Read-only restriction text — only present when `/plan` is toggled on]
 ```
+
+mem0 memories are *not* in the system prompt — the LLM retrieves them on demand via the `memory_search` tool. Plans produced by the `plan` tool are *not* re-injected either; the agent follows them from conversation history.
 
 ---
 
@@ -402,9 +416,8 @@ class Tool(Protocol):
 | `web_search` | `query`, `max_results?` | Web search via Brave Search API or DuckDuckGo |
 | `subagent` | `action`, `task`, `system_prompt?`, `task_id?` | Delegate tasks to isolated sub-agents |
 | `plan` | `task` | Create structured plan via read-only sub-agent |
-| `memory_search` | `query`, `top_k?` | Hybrid search across memory + history |
-| `memory_save` | `content`, `target?` | Save to `daily` (default) or `main` memory |
-| `memory_read` | `target`, `date?` | Read `main`, `daily`, or list `dates` |
+| `memory_search` | `query`, `top_k?` | Search the agent's mem0 memory (scope per `memory.scope`) |
+| `memory_save` | `content` | Append a curated entry to MEMORY.md |
 
 Registration happens in `tools/builtin/__init__.py` via `register_builtins()`. `SubagentTool` and `PlanTool` are registered separately in `__main__.py` after builtins and MCP setup, since they need access to the full tool registry for cloning.
 
@@ -458,123 +471,113 @@ Enables the LLM to delegate tasks to isolated sub-agents that run their own LLM 
 
 ## Memory System
 
-### Two-Tier Design
+### Two-Layer Design
 
-```
-.agent/memory/
-    MEMORY.md               # Stable, long-term knowledge
-    daily/
-        2026-03-09.md       # Temporal, session-level notes
-        2026-03-08.md
-```
-
-**MEMORY.md** — project conventions, user preferences, architecture decisions. Rarely changes. Loaded in full into every system prompt.
-
-**Daily notes** — session discoveries, decisions, activity logs. Auto-timestamped (`## HH:MM:SS`). Last N days (default 2) loaded into system prompt.
+| Layer | Purpose | Storage | Population |
+|-------|---------|---------|------------|
+| **MEMORY.md** | Stable, human-curated long-term knowledge — project conventions, user preferences, architecture decisions. | `~/.config/agent/MEMORY.md` (user-scoped, default; absolute / `~`-prefixed paths used as-is, relative paths join under `base_dir`) | Manual edits or via `memory_save` tool. Auto-loaded into every system prompt. |
+| **mem0** | Automatic conversational memory — facts, decisions, context distilled from messages by an LLM. | Chroma vector store at `~/.config/agent/mem0/global/` (when `scope: global`, default) or `<project>/.agent/mem0/project/` (when `scope: project`). | Every user/assistant text message is auto-ingested. Searched on demand via `memory_search`. |
 
 ### Memory Manager (`memory/manager.py`)
 
-Central orchestrator for all memory operations:
+Slim orchestrator — MEMORY.md I/O + delegate everything else to `Mem0Client`:
 
 | Method | Description |
 |--------|-------------|
-| `load_context()` | MEMORY.md + last N days -> system prompt |
-| `save_main(content)` | Append to MEMORY.md, re-index |
-| `save_daily(content)` | Append to today's daily, re-index |
-| `read_main()` | Full MEMORY.md content |
-| `read_daily(date?)` | Specific date or today |
-| `list_daily_dates()` | Available daily files |
-| `search(query, top_k)` | Hybrid search or keyword fallback |
-| `index_all()` | Index memory + recent history (startup) |
-| `index_session(text, id)` | Index after session save |
+| `load_context()` | Returns MEMORY.md content for the system prompt. |
+| `save_main(content)` | Append to MEMORY.md. |
+| `read_main()` | Full MEMORY.md content. |
+| `search(query, top_k)` | Delegate to `Mem0Client.search`; `[]` if no client. |
+| `handle_message_appended(message)` | Wired into `Conversation.on_append`; delegates to `Mem0Client.enqueue_message`. |
 
-### Indexing Strategy
+### Mem0 Client (`memory/mem0_client.py`)
 
-On startup (`index_all`):
-- Index MEMORY.md
-- Index last 7 days of daily notes
-- Index last 2 days of conversation history JSON files
+Owns one `mem0.Memory` instance, one `user_id`, and a background ingestion worker.
 
-On save: re-index the changed file immediately.
+```python
+class Mem0Client:
+    def __init__(self, config: Mem0Config, scope: str, project_dir: Path) -> None: ...
 
-After session: index the new conversation.
-
-Content-hash deduplication prevents re-indexing unchanged sources.
-
----
-
-## Embedding Search
-
-### Pipeline
-
-```
-Source text
-    |
-    v
-Chunking (word-based, configurable size + overlap)
-    |
-    v
-sentence-transformers model (all-MiniLM-L6-v2)
-    |
-    v
-SQLite store (chunks table + source_hashes table)
+    def enqueue_message(self, message: Message) -> None
+    async def search(self, query: str, top_k: int = 10) -> list[dict]
+    async def aclose(self) -> None
 ```
 
-### Components
+**Scope mapping:**
 
-**`EmbeddingIndexer`** (`embedding/indexer.py`)
-- Chunks text by word count (default 512 words, 50 word overlap)
-- Generates embeddings via sentence-transformers
-- Content-hash dedup: skips sources with unchanged hash
-- Methods: `index_text()`, `index_file()`, `index_directory()`
+| `scope` | `user_id` | Store dir |
+|---|---|---|
+| `"project"` | `str(project_dir.resolve())` | `config.project_store_dir` |
+| `"global"`  | `"global"` | `config.global_store_dir` |
 
-**`EmbeddingStore`** (`embedding/store.py`)
-- SQLite database at `.agent/embeddings.db`
-- `chunks` table: `id`, `source`, `chunk_text`, `embedding` (blob), `updated_at`
-- `source_hashes` table: tracks content hashes to skip re-indexing
-- Methods: `insert()`, `insert_batch()`, `get_all()`, `delete_by_source()`
+**Auto-ingestion path:**
 
-**`HybridSearch`** (`embedding/search.py`)
-- Semantic: cosine similarity between query embedding and stored embeddings
-- Keyword: BM25 ranking via `rank_bm25`
-- Combination: `score = alpha * semantic + (1 - alpha) * bm25`
-- Default `hybrid_alpha = 0.7` (70% semantic, 30% BM25)
-- Scores normalized to [0, 1]
-- Falls back to keyword-only search if embeddings are unavailable
+```
+Conversation.append(msg)
+    -> on_append callback -> MemoryManager.handle_message_appended
+    -> Mem0Client.enqueue_message
+        - filter: skip non-user/assistant roles, non-text blocks, empty text
+        - asyncio.Queue.put_nowait
+        - lazy-start a background asyncio task on first call
+
+Background worker:
+    -> asyncio.Queue.get
+    -> Mem0Client._ensure_init  (asyncio.to_thread on first call)
+    -> mem0.Memory.add(messages, user_id=...)  (asyncio.to_thread)
+```
+
+`Conversation.append` never blocks on I/O. `load_messages` and `clear` deliberately skip the `on_append` callback (resuming a session must not re-ingest history).
+
+### mem0 v2 API quirks
+
+- `add(messages, *, user_id=..., agent_id=..., run_id=..., metadata=..., infer=...)` — `user_id` is a top-level kwarg.
+- `search(query, *, top_k=20, filters=None, threshold=0.1, rerank=False, **kwargs)` — `user_id` must go inside `filters={'user_id': ...}`, and the param is `top_k` (not `limit`).
+- `Mem0Client._search_kwargs` constructs the v2 shape; on `TypeError` it falls back to the legacy `user_id=`, `limit=` form.
+
+### Logging
+
+`Mem0Client` emits:
+- `INFO` `mem0 ready: scope=…, user_id=…, store=…` once on first successful init.
+- `INFO` `mem0 search (scope=…) query=… → N hit(s)` per search call.
+- `WARNING` on init / ingest / search failure with a hint about `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and `chromadb`.
+- `DEBUG` `mem0 ingest [role]: <preview>` per ingested message.
+
+The default level is `ERROR` (only failures surface). Set `AGENT_LOG_LEVEL=WARNING` for non-fatal mem0 problems, `=INFO` to add init confirmations and search hit counts, or `=DEBUG` for per-message ingest logs and full third-party output.
 
 ---
 
 ## Compaction System (`compaction/compactor.py`)
 
-Prevents unbounded context growth by compressing old conversation messages.
+Prevents unbounded context growth by compressing old conversation messages. Note: there is no "extract facts to memory" phase — mem0 has already captured every conversation message in its index, so compaction only needs to free up tokens.
+
+### Constructor
+
+```python
+Compactor(config: CompactionConfig, llm: LLMProvider, conversation: Conversation)
+```
+
+(`memory_manager` was removed — compaction no longer touches memory.)
 
 ### Trigger
 
 Before each user message, checks if `conversation.total_tokens > threshold_tokens` (default 80,000).
 
-### Two-Phase Process
+### Two Phases
 
-**Phase 1: Flush to Memory** (`_flush_to_memory`)
-
-1. Format entire conversation as readable text
-2. LLM call with extraction prompt:
-   > Extract key facts: decisions made, project facts, user preferences, problems solved, file paths and patterns
-3. Save extracted facts to today's daily notes
-4. Automatic re-indexing
-
-**Phase 2: Summarize Old Messages** (`_summarize_old_messages`)
+**Phase 1: Summarize Old Messages** (`_summarize_old_messages`)
 
 1. Split messages: old (all but last N) + recent (last N, default 10)
-2. LLM call with summarization prompt:
+2. Adjust the split point if it would orphan a `tool_result` from its `tool_use` pair
+3. LLM call with summarization prompt:
    > Summarize: tasks performed, decisions and rationale, files modified, unresolved items
-3. Replace old messages with a single summary message
-4. Truncate oversized tool results in recent messages (>800 tokens → ~3000 char preview)
+4. Replace old messages with a single summary user message prefixed `[Previous conversation summary]`
 5. Recalculate `total_tokens`
-6. Recent messages preserved intact
 
-The tool result truncation (step 4) prevents large tool responses (e.g., Glean searches, file reads at 30k+ tokens each) from consuming the entire post-compaction context window. The assistant's text responses — which already contain the processed/summarized findings — remain untouched.
+**Phase 2: Truncate Oversized Tool Results** (`_truncate_all_tool_results`)
 
-Both LLM calls use `_call_llm_simple()` — no tools, no extended thinking, max 2048 tokens. Failures are handled gracefully: if extraction fails, only summarization runs; if summarization fails, a placeholder is inserted.
+For every preserved message, replace any `tool_result` block whose content exceeds `_MAX_TOOL_RESULT_TOKENS` (800) with a ~3000-char preview suffixed `... [truncated from N tokens during compaction]`. This handles the case where a few messages contain huge tool dumps that no amount of summarization can shrink.
+
+Summarization uses `_call_llm_simple()` — no tools, no extended thinking, max 2048 tokens. If the LLM fails, a placeholder summary is inserted so the conversation stays valid.
 
 ---
 
@@ -647,43 +650,41 @@ Non-disabled skill metadata is injected into the system prompt so the LLM can su
 
 ## Plan Mode
 
-The `plan` tool delegates planning to an isolated read-only sub-agent, enabling an explore-then-implement workflow.
+Two complementary mechanisms support an explore-then-implement workflow:
 
-### Architecture
+1. **`/plan` command** — toggles plan mode on the main agent. While active, the system prompt includes a `# Plan Mode` block instructing the model to avoid edits and destructive commands and stick to read-only exploration. Run `/plan` again to exit.
+2. **`plan` tool** — delegates to a read-only sub-agent that explores the codebase and writes a markdown plan to disk.
 
-- **Tool-based**: Planning is invoked via the `plan` tool, not a `/plan` command toggle
-- **Sub-agent**: `PlanTool` spawns a `SubagentRunner` with the `PLAN.md` system prompt and a read-only tool set
+The two are independent and can be used together (toggle `/plan`, then call the `plan` tool from inside read-only mode) or separately.
+
+### Plan Tool Architecture
+
+- **Sub-agent**: `PlanTool` spawns a `SubagentRunner` with the `PLAN.md` system prompt and a read-only tool set; output is streamed to the CLI in real time
 - **Session-bound**: Each plan is stored at `.agent/plans/<session_id>.md`, one plan per session
-- **Persistent**: The plan file on disk is the source of truth. `_build_system_prompt()` reads it fresh on every LLM call, so it survives compaction and `/clear`
-- **Auto-loaded**: When resuming a session via `/resume`, the plan is automatically loaded if it exists
+- **Conversation-driven**: The plan tool's output lands in the conversation history as a tool result. The agent follows the plan from history on subsequent turns — there is no system-prompt re-injection. `/resume` reloads the history, restoring the plan along with everything else
+- **Disk artifact**: The plan file persists across sessions as a user-facing artifact, but the agent does not re-read it on every turn
 
 ### Plan File Format
 
-Plans use markdown checkboxes in `.agent/plans/<session_id>.md`:
+Plans are free-form markdown — no fixed template, no required checkboxes:
 
 ```markdown
-- [x] Read the existing auth module
-- [ ] Add JWT verification middleware
-  - [ ] Create middleware function
-  - [ ] Add token validation
-- [ ] Write integration tests
+## Plan
 
-## Critical Files for Implementation
+1. Read the existing auth module
+2. Add JWT verification middleware (create middleware function + token validation)
+3. Write integration tests
+
+### Critical Files for Implementation
 - src/auth/middleware.py
 - tests/test_auth.py
 ```
-
-### Two Modes of Plan Injection
-
-1. **During planning**: The `plan` tool spawns a sub-agent with read-only tools (`read`, `glob`, `grep`, `bash`, `web_fetch`, `web_search` + MCP tools). The sub-agent explores the codebase and writes a checkbox plan. Output is streamed to the CLI in real-time.
-
-2. **After planning** (plan file exists with unchecked items): The system prompt includes the plan as an implementation guide. All tools are available. The LLM uses the `edit` tool to check off steps (`- [ ]` → `- [x]`) as it works.
 
 ### Tool Filtering
 
 ```python
 # PlanTool uses clone_including for read-only sub-agent
-_PLAN_TOOLS = {"read", "glob", "grep", "bash", "web_fetch", "web_search"}
+_PLAN_TOOLS = {"read", "glob", "grep", "bash", "web_fetch", "web_search", "ask_user"}
 filtered = parent_registry.clone_including(allowed | mcp_tools)
 ```
 
@@ -698,12 +699,16 @@ Conversation(
     messages: list[Message],
     system_prompt: str,
     total_tokens: int,
+    on_append: Callable[[Message], None] | None = None,
 )
 ```
 
-- `append(message)` — adds message, updates token count
-- `to_api_messages()` — converts to LLM API format
-- `clear()` — resets state
+- `append(message)` — adds message, updates token count, fires `on_append(message)` if set. Callback exceptions are swallowed at `DEBUG` so memory failures never crash the agent loop.
+- `load_messages(messages)` — replaces the message list (used by `/resume`); **deliberately does not fire `on_append`** so resumed history isn't re-ingested.
+- `clear()` — resets state; also skips `on_append`.
+- `to_api_messages()` — converts to LLM API format.
+
+`AgentLoop.__init__` sets `on_append=memory_manager.handle_message_appended` so every appended message — from user input, assistant streaming, and tool results — flows into the mem0 ingestion queue. Tool-related blocks are filtered inside `Mem0Client.enqueue_message` (only `role in {user, assistant}` AND text content survives).
 
 ### History Persistence (`history/storage.py`)
 
@@ -714,7 +719,8 @@ Conversation(
 - Backward compatible: falls back to legacy `.json` format if `.jsonl` not found
 - `list_sessions()` returns newest-first with message counts
 - `find_session()` / `get_latest_session_id()` for session resume
-- After save, conversation text is indexed for embedding search
+
+mem0 ingestion is decoupled from history persistence — it happens at append time, not save time, so the conversation is searchable as soon as the message lands.
 
 ---
 
@@ -745,23 +751,20 @@ Terminal interface built on Rich (rendering) and prompt_toolkit (input):
 | `httpx>=0.27` | HTTP client (web fetch/search tools) |
 | `beautifulsoup4>=4.12` | HTML parsing (web tools) |
 | `html2text>=2024.2` | HTML to markdown conversion (web tools) |
-| `numpy>=2.0` | Vector math for similarity |
+| `numpy>=2.0` | Vector math |
 | `pyyaml>=6.0` | YAML parsing |
 | `tiktoken>=0.8` | Token counting |
-
-### Optional (embedding extra)
-
-| Package | Purpose |
-|---------|---------|
-| `sentence-transformers>=3.0` | Embedding generation (~400MB model) |
-| `rank-bm25>=0.2` | BM25 keyword ranking |
-
-Install: `pip install ai-agent[embedding]`
+| `mem0ai>=0.1.0` | Persistent conversational memory (LLM-extracted) |
+| `chromadb>=0.5` | Vector store backend used by mem0 |
 
 ### Runtime
 
 - Python >= 3.13
 - External: `rg` (ripgrep) preferred, falls back to `grep`
+- Env vars:
+  - `ANTHROPIC_API_KEY` — required (agent + mem0 fact extraction)
+  - `OPENAI_API_KEY` — required when using the default `mem0.embedder.provider=openai`. Swap to Ollama / Voyage / etc. via `mem0.embedder` config to avoid it.
+  - `AGENT_LOG_LEVEL` — optional, defaults to `ERROR`. Set to `WARNING` / `INFO` / `DEBUG` to surface progressively more detail.
 
 ---
 
@@ -771,20 +774,20 @@ Install: `pip install ai-agent[embedding]`
 
 2. **No iteration limit** — the LLM cycle runs until the model produces a text-only response. This allows arbitrarily long tool-use chains for complex tasks.
 
-3. **Two-tier memory** — separating stable knowledge (MEMORY.md) from temporal notes (daily/) prevents context pollution and keeps the system prompt focused.
+3. **Two-layer memory** — MEMORY.md (curated, user-scoped, in the system prompt) handles facts the user wants pinned forever; mem0 (automatic, scoped per `memory.scope`, queried via `memory_search`) handles the rolling conversational record. The split keeps the system prompt small while making everything searchable.
 
-4. **Hybrid search** — combining semantic and BM25 search provides both conceptual and keyword matching. The 70/30 default blend favors semantic understanding while maintaining exact-match capability.
+4. **Auto-ingest via `Conversation.on_append`** — every appended message flows through a single hook, then through a background `asyncio.Queue` worker draining `mem0.Memory.add` via `asyncio.to_thread`. Zero effort for the model and zero added latency for the user. Filtering at enqueue keeps tool noise out.
 
-5. **Content-hash dedup** — embedding indexing tracks source content hashes to skip re-processing unchanged files, keeping startup fast.
+5. **Single mem0 scope (`global` or `project`)** — one `Memory` instance, one `user_id`, one vector store. Half the LLM extraction cost vs. dual-write, and a clearer privacy story. Default `global` because cross-project recall is the common case for a personal assistant.
 
 6. **Lazy skill loading** — only frontmatter is parsed at startup. Full skill bodies are loaded on invocation, keeping the initial system prompt small.
 
 7. **Anthropic message format internally** — all messages use Anthropic's content block format, keeping the core loop clean and consistent.
 
-8. **Graceful degradation** — embedding search falls back to keyword search if sentence-transformers is unavailable. MCP connection failures don't block startup. Compaction LLM failures use placeholder summaries.
+8. **Graceful degradation** — `Mem0Client` init failure logs a warning (with a hint) and returns `False`; search yields `[]`, ingest is skipped, the agent keeps working. MCP connection failures don't block startup. Compaction LLM failures use placeholder summaries.
 
 9. **Subagent isolation** — sub-agents run ephemeral conversations with filtered tool sets, preventing recursion and memory side effects. Max 50 iterations as a safety limit.
 
-10. **Plan as tool** — planning delegates to a read-only sub-agent rather than a stateful mode toggle, keeping the main agent loop simple and allowing plans to be created at any point during a conversation.
+10. **Plan via conversation history** — the `plan` tool emits its plan as a tool result and persists a copy to disk. The agent follows the plan from conversation history on subsequent turns rather than re-injecting it into the system prompt every cycle. The `/plan` toggle is a complementary read-only restriction for the main agent during exploration.
 
 11. **Adaptive thinking** — replaces fixed-budget extended thinking with adaptive mode (`low`/`medium`/`high` effort), letting the model decide how much reasoning to use.

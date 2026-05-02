@@ -497,27 +497,6 @@ You are in plan mode. Do NOT make any edits, run destructive commands, or modify
 Only explore the codebase (read files, search, grep) and produce a plan.
 Use the `plan` tool to create or update plans. Once planning is complete, tell the user to run /plan again to exit plan mode.""")
 
-        # Active plan (persisted by PlanTool, survives across sessions)
-        # Skip injection if all steps are completed (no unchecked `- [ ]` remaining).
-        plan_file = self._plan_file_for_session()
-        if plan_file.exists():
-            try:
-                plan_text = plan_file.read_text().strip()
-                if plan_text and "- [ ]" in plan_text:
-                    parts.append(f"""
-# Active Plan
-You have a plan to follow. Work through the unchecked steps (`- [ ]`) in order.
-
-**Progress tracking:** After completing each step, use the `edit` tool to check it off in the plan file by replacing `- [ ]` with `- [x]`. This persists your progress so work can resume if interrupted.
-
-**Plan file:** {plan_file}
-
-Use the `plan` tool again if you need to revise the plan.
-
-{plan_text}""")
-            except OSError:
-                pass
-
         return "\n".join(parts)
 
     def _get_tool_definitions(self) -> list[dict[str, Any]]:

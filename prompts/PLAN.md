@@ -35,18 +35,9 @@ Your role is EXCLUSIVELY to explore the codebase and design implementation plans
    - Identify dependencies and sequencing
    - Anticipate potential challenges
 
-## Required Output Format
+## Output Format
 
-Your plan MUST use markdown checkboxes for every actionable step. This format is required because the plan is persisted to disk and checkboxes are used to track progress across sessions.
-
-```
-## Plan
-
-- [ ] Step 1: Description of first task
-- [ ] Step 2: Description of second task
-  - [ ] Substep 2a: If needed, break into smaller pieces
-- [ ] Step 3: Description of third task
-```
+Write a clear markdown plan. Use whatever structure (headings, lists, prose) best fits the task — no fixed template.
 
 End your response with:
 

@@ -8,8 +8,9 @@ A CLI-based AI coding agent with tool use, memory, MCP support, and conversation
 # Install
 pip install -e .
 
-# Set your API key
-export ANTHROPIC_API_KEY="sk-ant-..."
+# API keys
+export ANTHROPIC_API_KEY="sk-ant-..."   # main LLM + mem0 fact extraction
+export OPENAI_API_KEY="sk-..."          # mem0 embedder (text-embedding-3-small)
 
 # Run
 python -m agent
@@ -18,17 +19,17 @@ python -m agent
 ## Requirements
 
 - Python 3.13+
-- An Anthropic API key
+- An Anthropic API key (used for the agent and for mem0's memory extraction)
+- An OpenAI API key (used for mem0's embedder; swap providers in `config.yaml` if you prefer Ollama / Voyage / etc.)
 
 ## Installation
 
 ```bash
 cd /path/to/agent
 pip install -e .
-
-# Optional: install embedding support (adds ~400MB model on first use)
-pip install -e ".[embedding]"
 ```
+
+`mem0ai` and `chromadb` are bundled as required dependencies — no extras to install.
 
 ## Configuration
 
@@ -76,6 +77,7 @@ Type your message and press **Enter** to send. Use `\` at the end of a line for 
 | `/compact` | Manually trigger conversation compaction |
 | `/model [name]` | Switch LLM model (supports aliases: `opus`, `sonnet`, `haiku`) |
 | `/prompt` | Display the current system prompt |
+| `/plan` | Toggle plan mode on the main agent (read-only exploration) |
 | `/skills` | List all available skills |
 | `/<skill-name> [args]` | Invoke a skill (e.g., `/review-pr 123`) |
 
@@ -96,61 +98,63 @@ The agent has access to these tools (called automatically by the LLM):
 | `web_search` | Search the web (Brave Search API or DuckDuckGo fallback) |
 | `subagent` | Delegate tasks to independent sub-agents (sync or async) |
 | `plan` | Create structured implementation plans via read-only exploration |
-| `memory_search` | Hybrid semantic + keyword search across memory and history |
-| `memory_save` | Save content to daily notes or main memory |
-| `memory_read` | Read main memory, daily notes, or list available dates |
+| `memory_search` | Search the agent's mem0 memory across past sessions |
+| `memory_save` | Append a curated entry to MEMORY.md (long-term knowledge) |
 
 ## Memory
 
-When `memory.enabled: true` (default), the agent loads `MEMORY.md` into its system prompt. This lets you persist project context across sessions.
+The agent has two memory layers:
 
-### File layout
+1. **MEMORY.md** — a single human-curated file at `~/.config/agent/MEMORY.md` (user-scoped, shared across all projects). Auto-loaded into every system prompt. Use it for stable, long-term knowledge: project conventions, user preferences, architecture decisions. The `memory_save` tool appends to it; you can also edit it directly.
 
+2. **mem0** — automatic memory. Every user and assistant message is sent to a [mem0](https://mem0.ai) index in the background, where an LLM extracts and stores salient facts. The `memory_search` tool queries this index for recall across past sessions. Ingestion runs on an `asyncio` worker via `asyncio.to_thread`, so it never blocks the conversation.
+
+### Scope
+
+`memory.scope` in `config.yaml` selects where mem0 memories live:
+
+| Scope | Store path | `user_id` | Use case |
+|---|---|---|---|
+| `global` (default) | `~/.config/agent/mem0/global/` | `"global"` | Personal CLI: your assistant remembers you across all projects. |
+| `project` | `<project>/.agent/mem0/project/` | absolute project path | Team-shared repo: keep one project's conversations isolated. |
+
+```yaml
+memory:
+  scope: global    # or "project"
 ```
-.agent/memory/
-├── MEMORY.md              # Main memory (loaded into every prompt)
-└── daily/
-    └── 2026-03-09.md      # Auto-generated daily notes
-```
 
-Create `MEMORY.md` manually or let the compaction system generate it.
+### Stack defaults
+
+- **LLM (memory extraction):** Anthropic `claude-haiku-4-5` (`${ANTHROPIC_API_KEY}`)
+- **Embedder:** OpenAI `text-embedding-3-small` (`${OPENAI_API_KEY}`)
+- **Vector store:** Chroma, file-backed — no extra service to run
+
+All swappable in `config.yaml` under `mem0.llm`, `mem0.embedder`. See `config.default.yaml` for the full schema.
 
 ## Plan Mode
 
-The `plan` tool spawns a read-only sub-agent that explores the codebase and produces a structured implementation plan.
+Two complementary mechanisms support an explore-then-implement workflow:
+
+- **`/plan` command** — toggles plan mode on the main agent, restricting it to read-only exploration so it doesn't make changes while you're still planning. Run `/plan` again to exit.
+- **`plan` tool** — delegates to a read-only sub-agent that explores the codebase and produces a markdown plan.
 
 ### How It Works
 
-1. The LLM calls the `plan` tool with a task description
-2. A sub-agent explores the codebase using read-only tools (`read`, `glob`, `grep`, `bash`, `web_fetch`, `web_search`)
-3. It writes a structured plan as markdown checkboxes to `.agent/plans/<session_id>.md`
-4. The plan is injected into the system prompt as an implementation guide
-5. The LLM works through the plan, using `edit` to check off completed steps
+1. The LLM calls the `plan` tool with a task description (or you toggle `/plan` first to stay in read-only mode while planning)
+2. The sub-agent explores using read-only tools (`read`, `glob`, `grep`, `bash`, `web_fetch`, `web_search`, `ask_user`)
+3. It writes a markdown plan to `.agent/plans/<session_id>.md`
+4. The tool's output is part of the conversation history, so the agent follows the plan from history on subsequent turns. Resuming the session via `/resume` reloads that history.
 
-### Plan Format
-
-Plans are stored as markdown in `.agent/plans/<session_id>.md`:
-
-```markdown
-- [x] Read the existing auth module
-- [ ] Add JWT verification middleware
-  - [ ] Create middleware function
-  - [ ] Add token validation
-- [ ] Write integration tests
-```
-
-### Session Binding
-
-Each plan is bound to its session. Different sessions can have independent plans. When you resume a session with `/resume`, its plan is automatically loaded. Plans persist across `/clear` and `/compact` within the same session.
+Plans are free-form markdown — no fixed template. Each session has its own plan file at `.agent/plans/<session_id>.md`, kept as a user-facing artifact.
 
 ## Conversation Compaction
 
 When token usage exceeds the threshold (default: 80,000), the agent automatically:
 
-1. Asks the LLM to extract key facts and decisions
-2. Writes them to `MEMORY.md` and today's daily file
-3. Summarizes older messages, keeping the last 10 intact
-4. Truncates oversized tool results (>800 tokens) in preserved messages to prevent them from dominating the context window
+1. Summarizes older messages, keeping the last N intact (`keep_recent_messages`, default 10)
+2. Truncates oversized tool results (>800 tokens) in preserved messages so a single huge file dump can't dominate the context window
+
+There is no separate "extract facts" step — mem0 has already captured every conversation message in its index, so compaction only needs to free up tokens.
 
 Configure in `config.yaml`:
 
@@ -164,24 +168,17 @@ compaction:
 
 All conversations are saved as JSONL (append-only) in `.agent/history/`. View past sessions with `/sessions`, or resume a previous session with `/resume [id]`.
 
-## Embedding Search (Optional)
+## Logging
 
-For semantic search over memory and history:
+The agent logs at `ERROR` by default — only failures show. To see init confirmations, search hit counts, or debug mem0 issues, bump the level:
 
 ```bash
-pip install -e ".[embedding]"
+AGENT_LOG_LEVEL=WARNING python -m agent   # show non-fatal mem0 problems
+AGENT_LOG_LEVEL=INFO    python -m agent   # also show "mem0 ready" and search hit counts
+AGENT_LOG_LEVEL=DEBUG   python -m agent   # full firehose, including third-party internals
 ```
 
-Enable in `config.yaml`:
-
-```yaml
-embedding:
-  enabled: true
-  model: all-MiniLM-L6-v2   # downloaded on first use
-  hybrid_alpha: 0.7          # weight: 0=pure BM25, 1=pure semantic
-```
-
-Uses a hybrid of cosine similarity (sentence-transformers) and BM25 keyword search, stored in a local SQLite database.
+`Mem0Client` emits an `INFO` line on first successful init (with the active scope and store path) and a `WARNING` (with a configuration hint) on init / ingest / search failure. Chatty third-party loggers (`httpx`, `chromadb`, `mem0.*`, `openai`, `anthropic`, etc.) are tamped down unless you set `DEBUG`.
 
 ## MCP Servers
 
@@ -298,9 +295,8 @@ src/agent/
 │   └── mcp/              # MCP client + tool adapter
 ├── subagent/             # Sub-agent runner for isolated task delegation
 ├── skills/               # Skill loader
-├── memory/               # MEMORY.md, daily notes
-├── embedding/            # SQLite store, indexer, hybrid search
-├── compaction/           # Token-based compaction
+├── memory/               # manager.py, files.py (MEMORY.md), mem0_client.py
+├── compaction/           # Token-based compaction (summarize + truncate)
 └── history/              # JSONL conversation persistence
 
 prompts/

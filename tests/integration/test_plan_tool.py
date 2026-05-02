@@ -295,68 +295,7 @@ class TestPlanTool:
 
 @pytest.mark.integration
 class TestPlanPersistenceInLoop:
-    """Test that AgentLoop injects persisted plan into system prompt."""
-
-    async def test_plan_injected_into_system_prompt(self, fake_llm, fake_cli, test_config, tmp_path):
-        from tests.integration.conftest import build_agent
-
-        agent = build_agent(fake_llm, fake_cli, test_config, tmp_path)
-        # Manually write a plan file with checkbox format
-        plan_file = agent._plan_file_for_session()
-        plan_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_file.write_text("## Plan\n- [x] Step 1: Do X\n- [ ] Step 2: Do Y")
-
-        system = await agent._build_system_prompt()
-        assert "Active Plan" in system
-        assert "- [x] Step 1: Do X" in system
-        assert "- [ ] Step 2: Do Y" in system
-        assert str(plan_file) in system
-        assert "edit" in system
-
-    async def test_plan_prompt_mentions_unchecked_steps(self, fake_llm, fake_cli, test_config, tmp_path):
-        """System prompt should instruct agent to work through unchecked steps."""
-        from tests.integration.conftest import build_agent
-
-        agent = build_agent(fake_llm, fake_cli, test_config, tmp_path)
-        plan_file = agent._plan_file_for_session()
-        plan_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_file.write_text("## Plan\n- [x] Done step\n- [ ] Pending step")
-
-        system = await agent._build_system_prompt()
-        assert "unchecked" in system.lower() or "- [ ]" in system
-        assert "- [x]" in system
-
-    async def test_completed_plan_not_injected(self, fake_llm, fake_cli, test_config, tmp_path):
-        """A fully completed plan (all - [x], no - [ ]) should NOT be injected."""
-        from tests.integration.conftest import build_agent
-
-        agent = build_agent(fake_llm, fake_cli, test_config, tmp_path)
-        plan_file = agent._plan_file_for_session()
-        plan_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_file.write_text("## Plan\n- [x] Step 1: Done\n- [x] Step 2: Also done")
-
-        system = await agent._build_system_prompt()
-        assert "Active Plan" not in system
-
-    async def test_partially_completed_plan_still_injected(self, fake_llm, fake_cli, test_config, tmp_path):
-        """A plan with remaining unchecked steps should still be injected."""
-        from tests.integration.conftest import build_agent
-
-        agent = build_agent(fake_llm, fake_cli, test_config, tmp_path)
-        plan_file = agent._plan_file_for_session()
-        plan_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_file.write_text("## Plan\n- [x] Step 1: Done\n- [ ] Step 2: Pending")
-
-        system = await agent._build_system_prompt()
-        assert "Active Plan" in system
-        assert "- [ ] Step 2: Pending" in system
-
-    async def test_no_plan_no_injection(self, fake_llm, fake_cli, test_config, tmp_path):
-        from tests.integration.conftest import build_agent
-
-        agent = build_agent(fake_llm, fake_cli, test_config, tmp_path)
-        system = await agent._build_system_prompt()
-        assert "Active Plan" not in system
+    """Test PlanTool wiring and /plan mode behavior in AgentLoop."""
 
     async def test_plan_tool_wired_to_session(self, fake_llm, fake_cli, test_config, tmp_path):
         """When plan_tool is passed to AgentLoop, it gets the session's plan file."""
