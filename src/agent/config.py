@@ -38,7 +38,7 @@ class AnthropicConfig:
 @dataclass
 class ReasoningConfig:
     enabled: bool = False
-    effort: str = "high"       # low, medium, high (adaptive thinking)
+    effort: str = "high"       # low, medium, high, xhigh, max, auto (adaptive thinking)
     show_thinking: bool = False
 
 

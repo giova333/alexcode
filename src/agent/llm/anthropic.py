@@ -17,6 +17,25 @@ from agent.llm.base import (
     UsageInfo,
 )
 
+# Effort levels accepted by the Anthropic adaptive-thinking output_config.
+# "auto" is sentinel — when selected we omit output_config so the API picks
+# its own adaptive level rather than us biasing it.
+VALID_EFFORTS: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max", "auto")
+
+# Shortcuts for /model command — maps aliases to full Anthropic model IDs.
+MODEL_ALIASES: dict[str, str] = {
+    # Current generation
+    "opus": "claude-opus-4-7",
+    "sonnet": "claude-sonnet-4-6",
+    "haiku": "claude-haiku-4-5-20251001",
+    # Previous generations
+    "sonnet-4.5": "claude-sonnet-4-5-20250929",
+    "opus-4.5": "claude-opus-4-5-20251101",
+    "opus-4.1": "claude-opus-4-1-20250805",
+    "sonnet-4": "claude-sonnet-4-20250514",
+    "opus-4": "claude-opus-4-20250514",
+}
+
 
 class AnthropicProvider:
     """Wraps the Anthropic SDK for streaming chat with tool use."""
@@ -49,8 +68,9 @@ class AnthropicProvider:
         # Adaptive thinking
         if reasoning and reasoning.enabled:
             kwargs["thinking"] = {"type": "adaptive"}
-            effort = reasoning.effort if reasoning.effort in ("low", "medium", "high") else "high"
-            kwargs["output_config"] = {"effort": effort}
+            effort = reasoning.effort if reasoning.effort in VALID_EFFORTS else "high"
+            if effort != "auto":
+                kwargs["output_config"] = {"effort": effort}
 
         async with self._client.messages.stream(**kwargs) as stream:
             current_block_type = ""

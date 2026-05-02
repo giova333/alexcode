@@ -21,6 +21,7 @@ BUILTIN_COMMANDS: dict[str, str] = {
     "/compact": "Compact conversation",
     "/skills": "List available skills",
     "/model": "Switch LLM model",
+    "/effort": "Set reasoning effort (low|medium|high|xhigh|max|auto)",
     "/prompt": "Show system prompt",
     "/help": "Show available commands",
     "/plan": "Toggle plan mode",

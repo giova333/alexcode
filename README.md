@@ -1,5 +1,7 @@
 # AI Agent
 
+![Alex Code](alex-code.png)
+
 A CLI-based AI coding agent with tool use, memory, MCP support, and conversation compaction.
 
 ## Quick Start

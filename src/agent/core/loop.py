@@ -15,6 +15,7 @@ from agent.core.conversation import Conversation
 from agent.core.message import Message
 from agent.core.tokens import count_message_tokens
 from agent.history.storage import HistoryStorage
+from agent.llm.anthropic import MODEL_ALIASES, VALID_EFFORTS
 from agent.llm.base import LLMProvider, TextDelta, ThinkingDelta, ToolUseEvent, ResponseComplete
 from agent.memory.manager import MemoryManager
 from agent.skills.loader import SkillLoader
@@ -24,20 +25,6 @@ from agent.tools.executor import ToolExecutor
 from agent.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
-
-# Shortcuts for /model command — maps aliases to full model IDs
-MODEL_ALIASES: dict[str, str] = {
-    # Current generation
-    "opus": "claude-opus-4-7",
-    "sonnet": "claude-sonnet-4-6",
-    "haiku": "claude-haiku-4-5-20251001",
-    # Previous generations
-    "sonnet-4.5": "claude-sonnet-4-5-20250929",
-    "opus-4.5": "claude-opus-4-5-20251101",
-    "opus-4.1": "claude-opus-4-1-20250805",
-    "sonnet-4": "claude-sonnet-4-20250514",
-    "opus-4": "claude-opus-4-20250514",
-}
 
 _PROMPTS_DIR = Path(__file__).parent.parent.parent.parent / "prompts"
 
@@ -252,8 +239,23 @@ class AgentLoop:
             status = "enabled" if self._plan_mode else "disabled"
             self._cli.print_info(f"Plan mode {status}.")
             return True
+        elif cmd == "/effort":
+            if not arg:
+                current = self._config.reasoning.effort
+                options = "|".join(VALID_EFFORTS)
+                self._cli.print_info(f"Current effort: {current}")
+                self._cli.print_info(f"Usage: /effort <{options}>")
+                return True
+            new_effort = arg.lower()
+            if new_effort not in VALID_EFFORTS:
+                options = ", ".join(VALID_EFFORTS)
+                self._cli.print_error(f"Invalid effort '{arg}'. Choose one of: {options}")
+                return True
+            self._config.reasoning.effort = new_effort
+            self._cli.print_info(f"Reasoning effort set to: {new_effort}")
+            return True
         elif cmd == "/help":
-            self._cli.print_info("Commands: /exit /clear /history /tokens /tools /sessions /resume [id] /compact /skills /model /plan /prompt /help")
+            self._cli.print_info("Commands: /exit /clear /history /tokens /tools /sessions /resume [id] /compact /skills /model /effort /plan /prompt /help")
             invocable = [s for s in self._skills if s.user_invocable]
             if invocable:
                 self._cli.print_info(f"Skills: {', '.join('/' + s.name for s in invocable)}")

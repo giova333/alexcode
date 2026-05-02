@@ -1,5 +1,5 @@
 provider: anthropic
-model: claude-sonnet-4-6
+model: claude-opus-4-7
 max_tokens: 8192
 
 anthropic:
@@ -7,7 +7,7 @@ anthropic:
 
 reasoning:
   enabled: true
-  effort: xhigh               # low, medium, high (adaptive thinking)
+  effort: xhigh               # low, medium, high, xhigh, max, auto (adaptive thinking)
   show_thinking: true        # Display thinking output in the terminal
 
 compaction:
