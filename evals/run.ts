@@ -9,10 +9,11 @@
 
 import { runScenario, type EvalScenario, type EvalOutcome } from './harness.js';
 import { answerQuestion } from './scenarios/answer-question.js';
+import { binarySearch } from './scenarios/binary-search.js';
 import { createFile } from './scenarios/create-file.js';
 import { editFile } from './scenarios/edit-file.js';
 
-const SCENARIOS: EvalScenario[] = [createFile, editFile, answerQuestion];
+const SCENARIOS: EvalScenario[] = [createFile, editFile, answerQuestion, binarySearch];
 
 async function main(): Promise<void> {
   if (!process.env.ANTHROPIC_API_KEY) {

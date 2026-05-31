@@ -209,7 +209,7 @@ npm run eval            # runs all scenarios; skips (exit 0) if the key is unset
 npm run eval edit       # filter by scenario name substring
 ```
 
-Scenarios cover creating a file, reading + editing a buggy file, and answering a question about a seeded repo. They are opt-in (not part of `npm test`) and cost a small amount of API tokens; the default model is Haiku (`EVAL_MODEL` to override, `EVAL_VERBOSE=1` to stream output). See [`evals/README.md`](evals/README.md) for details and how to add scenarios.
+Scenarios cover creating a file, reading + editing a buggy file, answering a question about a seeded repo, and a non-trivial coding task (binary search). The coding task is graded with a **hybrid** strategy — an execution gate (run the produced code against hidden tests) plus **LLM-as-judge** for qualitative criteria (genuine O(log n) algorithm, edge cases, cleanliness). They are opt-in (not part of `npm test`) and cost a small amount of API tokens; the default model under test is Haiku and the judge is Sonnet (`EVAL_MODEL` / `EVAL_JUDGE_MODEL` to override, `EVAL_VERBOSE=1` to stream output). See [`evals/README.md`](evals/README.md) for details and how to add scenarios.
 
 ## MCP Servers
 
