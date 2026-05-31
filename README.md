@@ -4,34 +4,58 @@
 
 A CLI-based AI coding agent with tool use, memory, MCP support, and conversation compaction.
 
+> **Node.js + TypeScript.** This project was rewritten from Python to Node.js/TypeScript.
+> It targets Node 20+, uses ES modules and strict TypeScript, and is tested with Vitest.
+
 ## Quick Start
 
 ```bash
-# Install
-pip install -e .
+# Install dependencies and build
+npm install
+npm run build
 
 # API keys
 export ANTHROPIC_API_KEY="sk-ant-..."   # main LLM + mem0 fact extraction
 export OPENAI_API_KEY="sk-..."          # mem0 embedder (text-embedding-3-small)
 
-# Run
-python -m agent
+# Run (built)
+node dist/index.js
+
+# …or run directly from source during development
+npm run dev
 ```
 
 ## Requirements
 
-- Python 3.13+
+- Node.js 20+
 - An Anthropic API key (used for the agent and for mem0's memory extraction)
-- An OpenAI API key (used for mem0's embedder; swap providers in `config.yaml` if you prefer Ollama / Voyage / etc.)
+- An OpenAI API key (used for mem0's embedder; swap providers in `config.yaml` if you prefer another provider)
 
 ## Installation
 
 ```bash
 cd /path/to/agent
-pip install -e .
+npm install        # installs dependencies (mem0ai is optional and loaded lazily)
+npm run build      # compiles TypeScript to dist/
+npm link           # optional: exposes the `alexcode` command globally
 ```
 
-`mem0ai` and `chromadb` are bundled as required dependencies — no extras to install.
+The `mem0ai` vector-memory SDK is an **optional dependency**, loaded via dynamic
+import. If it (or its embedder/vector backend) is unavailable, the agent runs
+normally — the curated `MEMORY.md` layer still works and vector search simply
+returns no results.
+
+### Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `npm run dev` | Run the CLI from source via `tsx` |
+| `npm run build` | Compile to `dist/` |
+| `npm start` | Run the compiled CLI (`node dist/index.js`) |
+| `npm test` | Run the Vitest suite |
+| `npm run typecheck` | Type-check without emitting |
+| `npm run lint` | ESLint |
+| `npm run format` | Prettier |
 
 ## Configuration
 
@@ -53,13 +77,13 @@ model: claude-sonnet-4-6
 
 ```bash
 # Run
-python -m agent
+node dist/index.js          # or: npm run dev
 
 # Override model via CLI flag
-python -m agent --model claude-sonnet-4-6
+node dist/index.js --model claude-sonnet-4-6
 
 # Resume a previous session
-python -m agent --resume [session-id]
+node dist/index.js --resume [session-id]
 ```
 
 Type your message and press **Enter** to send. Use `\` at the end of a line for multiline input.
@@ -110,7 +134,7 @@ The agent has two memory layers:
 
 1. **MEMORY.md** — a single human-curated file at `~/.config/agent/MEMORY.md` (user-scoped, shared across all projects). Auto-loaded into every system prompt. Use it for stable, long-term knowledge: project conventions, user preferences, architecture decisions. The `memory_save` tool appends to it; you can also edit it directly.
 
-2. **mem0** — automatic memory. After each user→assistant turn, the full turn is batched into a single [mem0](https://mem0.ai) `add()` call in the background, where an LLM extracts and stores salient facts. The `memory_search` tool queries this index for recall across past sessions. Ingestion runs on an `asyncio` worker via `asyncio.to_thread`, so it never blocks the conversation.
+2. **mem0** — automatic memory, behind a pluggable `MemoryProvider` interface. After each user→assistant turn, the full turn is batched into a single [mem0](https://mem0.ai) `add()` call on a background queue, where an LLM extracts and stores salient facts. The `memory_search` tool queries this index for recall across past sessions. The `mem0ai` SDK is loaded via dynamic import; if it's unavailable the provider degrades to a no-op (search returns nothing), and the curated MEMORY.md layer is unaffected.
 
 ### Scope
 
@@ -130,9 +154,9 @@ memory:
 
 - **LLM (memory extraction):** Anthropic `claude-haiku-4-5` (`${ANTHROPIC_API_KEY}`)
 - **Embedder:** OpenAI `text-embedding-3-small` (`${OPENAI_API_KEY}`)
-- **Vector store:** Chroma, file-backed — no extra service to run
+- **Vector store:** provided by the `mem0ai` OSS SDK
 
-All swappable in `config.yaml` under `mem0.llm`, `mem0.embedder`. See `config.default.yaml` for the full schema.
+LLM and embedder are swappable in `config.yaml` under `mem0.llm` / `mem0.embedder`. See `config.default.yaml` for the full schema.
 
 ## Plan Mode
 
@@ -173,15 +197,7 @@ All conversations are saved as JSONL (append-only) in `.agent/history/`. View pa
 
 ## Logging
 
-The agent logs at `ERROR` by default — only failures show. To see init confirmations, search hit counts, or debug mem0 issues, bump the level:
-
-```bash
-AGENT_LOG_LEVEL=WARNING python -m agent   # show non-fatal mem0 problems
-AGENT_LOG_LEVEL=INFO    python -m agent   # also show "mem0 ready" and search hit counts
-AGENT_LOG_LEVEL=DEBUG   python -m agent   # full firehose, including third-party internals
-```
-
-`Mem0Client` emits an `INFO` line on first successful init (with the active scope and store path) and a `WARNING` (with a configuration hint) on init / ingest / search failure. Chatty third-party loggers (`httpx`, `chromadb`, `mem0.*`, `openai`, `anthropic`, etc.) are tamped down unless you set `DEBUG`.
+Diagnostics (mem0 init/ingest/search failures, MCP connection warnings) are written to **stderr** via `console.error`, so they don't interfere with the interactive transcript on stdout. Failures degrade gracefully: a broken mem0 backend disables vector search but leaves the rest of the agent fully functional.
 
 ## MCP Servers
 
@@ -278,31 +294,36 @@ Check for:
 ## Project Structure
 
 ```
-src/agent/
-├── __main__.py           # Entry point
-├── cli.py                # Terminal I/O (rich + prompt_toolkit)
-├── config.py             # YAML config loading
+src/
+├── index.ts              # CLI entry point (commander)
+├── bootstrap.ts          # Async init + wiring
+├── paths.ts              # Bundled resource locations
+├── prompts.ts            # Prompt loading + {{CWD}}/{{LOCAL_TIME}} placeholders
+├── cli/                  # Terminal I/O (readline + chalk + marked-terminal), completer, CLI interface
+├── config/               # config.ts (loader) + schema.ts (types/defaults)
 ├── core/
-│   ├── loop.py           # Main agent loop
-│   ├── message.py        # Message dataclasses
-│   ├── conversation.py   # Conversation state
-│   └── tokens.py         # Token counting (tiktoken)
+│   ├── loop.ts           # Main agent loop
+│   ├── message.ts        # Message + content-block discriminated unions
+│   ├── conversation.ts   # Conversation state + tool-pair sanitization
+│   └── tokens.ts         # Token counting (js-tiktoken)
 ├── llm/
-│   ├── base.py           # LLMProvider protocol
-│   └── anthropic.py      # Anthropic Claude provider
+│   ├── base.ts           # LLMProvider interface + stream events
+│   └── anthropic.ts      # Anthropic Claude provider (@anthropic-ai/sdk)
 ├── tools/
-│   ├── base.py           # Tool protocol
-│   ├── registry.py       # Tool registry
-│   ├── executor.py       # Tool dispatcher
-│   ├── builtin/          # bash, read, write, edit, glob, grep, plan, subagent, web_fetch, web_search
-│   └── mcp/              # MCP client + tool adapter
+│   ├── base.ts           # Tool interface
+│   ├── registry.ts       # Tool registry
+│   ├── executor.ts       # Tool dispatcher
+│   ├── builtin/          # bash, read, write, edit, glob, grep, plan, subagent, web_fetch, web_search, memory
+│   └── mcp/              # MCP client + tool adapter + OAuth
 ├── subagent/             # Sub-agent runner for isolated task delegation
-├── skills/               # Skill loader
-├── memory/               # manager.py, files.py (MEMORY.md), mem0_client.py
+├── skills/               # Skill loader + model
+├── memory/               # manager.ts, files.ts (MEMORY.md), provider.ts, mem0Provider.ts
 ├── compaction/           # Token-based compaction (summarize + truncate)
 └── history/              # JSONL conversation persistence
 
 prompts/
 ├── SYSTEM.md             # Base system prompt
 └── PLAN.md               # Plan mode system prompt
+
+tests/                    # Vitest suites + fakes (FakeLLMProvider, FakeCLI)
 ```

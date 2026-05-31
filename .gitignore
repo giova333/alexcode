@@ -1,10 +1,10 @@
-__pycache__/
-*.py[cod]
-*.egg-info/
+node_modules/
 dist/
 build/
-.venv/
 .idea/
+.vscode/
 .agent/
 *.db
 config.yaml
+*.tsbuildinfo
+npm-debug.log*

@@ -1,0 +1,53 @@
+{
+  "name": "alexcode",
+  "version": "0.1.0",
+  "description": "AI coding agent with tool use, memory, and MCP support (Node.js + TypeScript)",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "alexcode": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.65.0",
+    "@modelcontextprotocol/sdk": "^1.20.0",
+    "chalk": "^5.6.0",
+    "cheerio": "^1.0.0",
+    "commander": "^14.0.0",
+    "fast-glob": "^3.3.3",
+    "js-tiktoken": "^1.0.21",
+    "marked": "^15.0.0",
+    "marked-terminal": "^7.3.0",
+    "open": "^10.1.0",
+    "turndown": "^7.2.0",
+    "yaml": "^2.8.0"
+  },
+  "optionalDependencies": {
+    "mem0ai": "^2.1.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.18.0",
+    "@types/marked-terminal": "^6.1.1",
+    "@types/node": "^22.0.0",
+    "@types/turndown": "^5.0.5",
+    "@typescript-eslint/eslint-plugin": "^8.20.0",
+    "@typescript-eslint/parser": "^8.20.0",
+    "eslint": "^9.18.0",
+    "prettier": "^3.4.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

@@ -1,8 +1,19 @@
 # Technical Documentation
 
+> **Note:** This document describes the original architecture. The agent has since
+> been rewritten in **Node.js + TypeScript** (ES modules, strict TS, Vitest). The
+> architecture below was ported faithfully: the control flow, message/content-block
+> format, tool contract, streaming events, compaction, JSONL history, skills, and MCP
+> integration are preserved. Where the document mentions Python specifics, the TS
+> equivalents are: `asyncio` → `async`/`await` + async generators; `Protocol` →
+> `interface`; `tiktoken` → `js-tiktoken`; `httpx` → `fetch`; `rich`/`prompt_toolkit`
+> → `chalk`/`marked-terminal` + Node `readline`; `mem0`/`chromadb` → the optional
+> `mem0ai` SDK behind a `MemoryProvider` interface. See `README.md` and `src/` for the
+> current layout.
+
 ## Architecture Overview
 
-The agent is an async Python CLI application that orchestrates LLM conversations with tool use, persistent memory, and extensible skills. It follows a streaming-first, protocol-based architecture built on `asyncio`.
+The agent is an async CLI application that orchestrates LLM conversations with tool use, persistent memory, and extensible skills. It follows a streaming-first, interface-based architecture built on async/await.
 
 ```
 User Input
