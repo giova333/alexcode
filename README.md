@@ -199,6 +199,18 @@ All conversations are saved as JSONL (append-only) in `.agent/history/`. View pa
 
 Diagnostics (mem0 init/ingest/search failures, MCP connection warnings) are written to **stderr** via `console.error`, so they don't interfere with the interactive transcript on stdout. Failures degrade gracefully: a broken mem0 backend disables vector search but leaves the rest of the agent fully functional.
 
+## Evaluations
+
+Beyond the deterministic Vitest suite, `evals/` holds **live** end-to-end evaluations that run the real agent against the Anthropic API on a throwaway workspace and grade the outcome:
+
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+npm run eval            # runs all scenarios; skips (exit 0) if the key is unset
+npm run eval edit       # filter by scenario name substring
+```
+
+Scenarios cover creating a file, reading + editing a buggy file, and answering a question about a seeded repo. They are opt-in (not part of `npm test`) and cost a small amount of API tokens; the default model is Haiku (`EVAL_MODEL` to override, `EVAL_VERBOSE=1` to stream output). See [`evals/README.md`](evals/README.md) for details and how to add scenarios.
+
 ## MCP Servers
 
 Connect to [Model Context Protocol](https://modelcontextprotocol.io/) servers to add external tools.
