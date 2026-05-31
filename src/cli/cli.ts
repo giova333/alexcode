@@ -18,14 +18,20 @@ const MAX_HISTORY = 1000;
 
 export class CLI implements CLIInterface {
   private completer: AgentCompleter;
-  private rl: readline.Interface;
+  private rl: readline.Interface | null = null;
   private closed = false;
   private historyEntries: string[];
 
   constructor(workingDir?: string) {
     this.completer = new AgentCompleter(workingDir);
     this.historyEntries = loadHistory();
-    this.rl = readline.createInterface({
+  }
+
+  // Readline binds to stdin and keeps the event loop alive, so it's created
+  // lazily — non-interactive modes (e.g. `-p`) never touch stdin.
+  private ensureReadline(): readline.Interface {
+    if (this.rl) return this.rl;
+    const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
       terminal: true,
@@ -33,10 +39,12 @@ export class CLI implements CLIInterface {
       historySize: MAX_HISTORY,
     });
     // Seed readline's in-memory history (most-recent-first).
-    (this.rl as any).history = [...this.historyEntries].reverse();
-    this.rl.on('close', () => {
+    (rl as any).history = [...this.historyEntries].reverse();
+    rl.on('close', () => {
       this.closed = true;
     });
+    this.rl = rl;
+    return rl;
   }
 
   setSkills(skills: Array<[string, string]>): void {
@@ -65,7 +73,7 @@ export class CLI implements CLIInterface {
         resolve(null);
         return;
       }
-      this.rl.question(prompt, (answer) => resolve(answer));
+      this.ensureReadline().question(prompt, (answer) => resolve(answer));
     });
   }
 
@@ -164,7 +172,7 @@ export class CLI implements CLIInterface {
   }
 
   close(): void {
-    this.rl.close();
+    this.rl?.close();
   }
 }
 

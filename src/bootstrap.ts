@@ -22,6 +22,8 @@ import { ToolRegistry } from './tools/registry.js';
 export interface CliArgs {
   model?: string | undefined;
   resume?: string | undefined;
+  /** Non-interactive one-shot: run this single prompt to completion and exit. */
+  print?: string | undefined;
 }
 
 function createLlmProvider(config: Config): LLMProvider {
@@ -97,26 +99,30 @@ export async function runApp(args: CliArgs): Promise<void> {
     planTool,
   });
 
-  // Resume a previous session if requested.
-  if (args.resume) {
-    const sessionId =
-      args.resume === '__latest__'
-        ? history.getLatestSessionId()
-        : history.findSession(args.resume);
-    if (sessionId && loop.resumeSession(sessionId)) {
-      const msgCount = loop.conversationState.messages.length;
-      cli.printInfo(`Resumed session: ${sessionId} (${msgCount} messages)`);
-    } else {
-      cli.printError(
-        args.resume === '__latest__'
-          ? 'No previous sessions.'
-          : `Session not found: ${args.resume}`,
-      );
-    }
-  }
-
   try {
-    await loop.run();
+    if (args.print !== undefined) {
+      // Non-interactive one-shot: run a single prompt and exit.
+      await loop.processMessage(args.print);
+    } else {
+      // Resume a previous session if requested.
+      if (args.resume) {
+        const sessionId =
+          args.resume === '__latest__'
+            ? history.getLatestSessionId()
+            : history.findSession(args.resume);
+        if (sessionId && loop.resumeSession(sessionId)) {
+          const msgCount = loop.conversationState.messages.length;
+          cli.printInfo(`Resumed session: ${sessionId} (${msgCount} messages)`);
+        } else {
+          cli.printError(
+            args.resume === '__latest__'
+              ? 'No previous sessions.'
+              : `Session not found: ${args.resume}`,
+          );
+        }
+      }
+      await loop.run();
+    }
   } finally {
     await mcpManager.close();
     if (memoryProvider !== null) await memoryProvider.close();

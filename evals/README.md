@@ -1,9 +1,15 @@
 # Evaluations
 
 Live, end-to-end evaluations of the agent. Unlike the Vitest suite in `tests/`
-(which is deterministic and scripts the LLM), these evals run the **real**
-`AgentLoop` against the **Anthropic API** on a throwaway temp workspace and grade
-the result by inspecting the filesystem and/or the agent's final answer.
+(which is deterministic and scripts the LLM), these evals drive the **real CLI**
+against the **Anthropic API** and grade the result by inspecting the filesystem
+and/or the agent's output.
+
+Each scenario spawns the actual built binary in one-shot mode
+(`node dist/index.js -p "<prompt>"`) inside a throwaway temp workspace, so the
+true entrypoint is exercised end-to-end: `index.ts → bootstrap.ts → CLI →
+AgentLoop → tools`. (`npm run eval` builds first.) A per-workspace `config.yaml`
+disables mem0/memory/skills so runs are reproducible and cheap.
 
 They are opt-in and **not** part of `npm test` — they require an API key and cost
 a small amount of tokens.
@@ -40,9 +46,10 @@ The runner exits non-zero if any scenario fails.
 | `answer-question` | Inspects a seeded repo and answers a factual question (`read`/`grep`/`glob`) | Deterministic (substring) |
 | `binary-search` | Implements a non-trivial algorithm | **Hybrid: execution gate + LLM-as-judge** |
 
-Each scenario runs in an isolated `mkdtemp` workspace that is removed afterwards.
-The harness `chdir`s into that workspace so the agent's relative file operations
-land there.
+Each scenario runs in an isolated `mkdtemp` workspace that is removed afterwards;
+the CLI subprocess is spawned with that workspace as its `cwd`, so the agent's
+relative file operations land there. `finalText` is the CLI's stdout and
+`toolCalls` are parsed from its `⚡ <tool>` markers.
 
 ### Grading strategies
 

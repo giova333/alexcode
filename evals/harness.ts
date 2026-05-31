@@ -1,20 +1,20 @@
 /**
- * Live eval harness: drives the real AgentLoop against the Anthropic API on a
- * throwaway workspace and grades the outcome. Reuses the production modules so
- * the evals exercise the same code paths the CLI does.
+ * Live eval harness. Drives the REAL alexcode CLI end-to-end: it spawns the
+ * built binary (`node dist/index.js -p "<prompt>"`) in a throwaway workspace,
+ * so the eval exercises the true entrypoint — index.ts → bootstrap.ts → CLI →
+ * AgentLoop → tools — exactly as a user would. Grades by inspecting the
+ * workspace and the CLI's stdout.
  */
 
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import type { CLI } from '../src/cli/types.js';
-import { buildConfig } from '../src/config/schema.js';
-import { AgentLoop } from '../src/core/loop.js';
-import { AnthropicProvider } from '../src/llm/anthropic.js';
-import { registerBuiltins } from '../src/tools/builtin/index.js';
-import { ToolExecutor } from '../src/tools/executor.js';
-import { ToolRegistry } from '../src/tools/registry.js';
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.dirname(HERE);
+const CLI_ENTRY = path.resolve(REPO_ROOT, 'dist/index.js');
 
 const DEFAULT_MODEL = 'claude-haiku-4-5-20251001';
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -22,10 +22,12 @@ const VERBOSE = process.env.EVAL_VERBOSE === '1';
 
 export interface GradeContext {
   workspace: string;
-  /** Concatenated text of all assistant messages produced during the turn. */
+  /** Everything the CLI wrote to stdout (ANSI stripped). */
   finalText: string;
-  /** Names of every tool the agent invoked, in order. */
+  /** Tool names parsed from the CLI's "⚡ <tool>" markers, in order. */
   toolCalls: string[];
+  /** The CLI's stderr (diagnostics), for debugging a failure. */
+  stderr: string;
 }
 
 export interface GradeResult {
@@ -47,123 +49,115 @@ export interface EvalOutcome extends GradeResult {
   error?: string;
 }
 
-/** Minimal CLI that never blocks and records what the agent did. */
-class HeadlessCLI implements CLI {
-  assistantText = '';
-  toolCalls: string[] = [];
+// eslint-disable-next-line no-control-regex -- intentionally matching the ESC control char
+const ANSI = /\x1b\[[0-9;]*m/g;
+const stripAnsi = (s: string): string => s.replace(ANSI, '');
 
-  printWelcome(): void {}
-  printInfo(message: string): void {
-    if (VERBOSE) process.stdout.write(`  · ${message}\n`);
-  }
-  printError(message: string): void {
-    if (VERBOSE) process.stdout.write(`  ! ${message}\n`);
-  }
-  printQuestion(question: string): void {
-    if (VERBOSE) process.stdout.write(`  ? ${question}\n`);
-  }
-  printTextDelta(text: string): void {
-    this.assistantText += text;
-    if (VERBOSE) process.stdout.write(text);
-  }
-  printThinkingDelta(text: string): void {
-    if (VERBOSE) process.stdout.write(text);
-  }
-  printAssistantText(text: string): void {
-    this.assistantText += text;
-  }
-  printToolUse(name: string): void {
-    this.toolCalls.push(name);
-    if (VERBOSE) process.stdout.write(`\n  ⚡ ${name}\n`);
-  }
-  printToolResult(): void {}
-  printUsage(): void {}
-  printCompactionNotice(): void {}
-  startResponse(): void {}
-  endResponse(): void {}
-  startThinking(): void {}
-  endThinking(): void {}
-  // Non-interactive: ask_user resolves to "no answer" instead of blocking.
-  async getInput(): Promise<string | null> {
-    return null;
-  }
-  setSkills(): void {}
+/**
+ * A project config that disables stateful/networked subsystems (mem0, memory,
+ * skills) so evals are reproducible and cheap. The model is overridable via
+ * EVAL_MODEL; the API key flows from the inherited ANTHROPIC_API_KEY env (the
+ * bundled config.default.yaml interpolates ${ANTHROPIC_API_KEY}).
+ */
+function writeWorkspaceConfig(workspace: string, model: string): void {
+  const yaml = [
+    `model: ${model}`,
+    'reasoning:',
+    '  enabled: false',
+    'memory:',
+    '  enabled: false',
+    'mem0:',
+    '  enabled: false',
+    'skills:',
+    '  dirs: []',
+    '',
+  ].join('\n');
+  fs.writeFileSync(path.join(workspace, 'config.yaml'), yaml);
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
-    promise.then(
-      (v) => {
-        clearTimeout(timer);
-        resolve(v);
-      },
-      (e) => {
-        clearTimeout(timer);
-        reject(e);
-      },
-    );
+interface CliRun {
+  stdout: string;
+  stderr: string;
+  code: number | null;
+  timedOut: boolean;
+}
+
+function runCli(prompt: string, workspace: string, timeoutMs: number): Promise<CliRun> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [CLI_ENTRY, '-p', prompt], {
+      cwd: workspace,
+      env: process.env,
+    });
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGKILL');
+    }, timeoutMs);
+
+    child.stdout.on('data', (d: Buffer) => {
+      stdout += d.toString();
+      if (VERBOSE) process.stdout.write(d);
+    });
+    child.stderr.on('data', (d: Buffer) => {
+      stderr += d.toString();
+      if (VERBOSE) process.stderr.write(d);
+    });
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      resolve({ stdout, stderr: String(err), code: 1, timedOut });
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ stdout, stderr, code, timedOut });
+    });
   });
 }
 
 export async function runScenario(scenario: EvalScenario): Promise<EvalOutcome> {
   const start = Date.now();
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'alexcode-eval-'));
-  const originalCwd = process.cwd();
 
+  if (!fs.existsSync(CLI_ENTRY)) {
+    return {
+      name: scenario.name,
+      durationMs: 0,
+      pass: false,
+      detail: `built CLI not found at ${CLI_ENTRY} — run \`npm run build\` first`,
+      error: 'missing build',
+    };
+  }
+
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'alexcode-eval-'));
   try {
     await scenario.setup?.(workspace);
-
-    const model = process.env.EVAL_MODEL ?? DEFAULT_MODEL;
-    const config = buildConfig({
-      model,
-      anthropic: { api_key: process.env.ANTHROPIC_API_KEY ?? '' },
-      reasoning: { enabled: false },
-      memory: { enabled: false },
-      mem0: { enabled: false },
-      skills: { dirs: [] },
-    });
-
-    const cli = new HeadlessCLI();
-    const llm = new AnthropicProvider(config.anthropic, config.model);
-    const registry = new ToolRegistry();
-    registerBuiltins(registry, config, cli, null);
-    const executor = new ToolExecutor(registry);
-
-    const loop = new AgentLoop({
-      config,
-      llm,
-      cli,
-      projectDir: workspace,
-      toolRegistry: registry,
-      toolExecutor: executor,
-      memoryManager: null,
-      history: null,
-    });
+    writeWorkspaceConfig(workspace, process.env.EVAL_MODEL ?? DEFAULT_MODEL);
 
     const prompt =
       typeof scenario.prompt === 'function' ? scenario.prompt(workspace) : scenario.prompt;
-
-    // File tools resolve relative paths against process.cwd(); run inside the
-    // scratch workspace so the agent's edits land there.
-    process.chdir(workspace);
     const timeoutMs = Number(process.env.EVAL_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS);
-    try {
-      await withTimeout(loop.processMessage(prompt), timeoutMs, scenario.name);
-    } finally {
-      process.chdir(originalCwd);
+
+    const run = await runCli(prompt, workspace, timeoutMs);
+    if (run.timedOut) {
+      return {
+        name: scenario.name,
+        durationMs: Date.now() - start,
+        pass: false,
+        detail: `CLI timed out after ${timeoutMs}ms`,
+      };
     }
 
-    const finalText = loop.conversationState.messages
-      .filter((m) => m.role === 'assistant')
-      .map((m) => m.text)
-      .filter((t) => t.length > 0)
-      .join('\n');
+    const finalText = stripAnsi(run.stdout);
+    const toolCalls = [...finalText.matchAll(/⚡\s+(\S+)/g)].map((m) => m[1]!);
 
-    const grade = await scenario.grade({ workspace, finalText, toolCalls: cli.toolCalls });
+    const grade = await scenario.grade({
+      workspace,
+      finalText,
+      toolCalls,
+      stderr: stripAnsi(run.stderr),
+    });
     return { name: scenario.name, durationMs: Date.now() - start, ...grade };
   } catch (e: any) {
-    process.chdir(originalCwd);
     return {
       name: scenario.name,
       durationMs: Date.now() - start,

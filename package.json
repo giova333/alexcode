@@ -19,7 +19,7 @@
     "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\" \"evals/**/*.ts\"",
     "test": "vitest run",
     "test:watch": "vitest",
-    "eval": "tsx evals/run.ts"
+    "eval": "npm run build && tsx evals/run.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.65.0",

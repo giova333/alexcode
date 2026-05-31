@@ -15,14 +15,15 @@ function main(): void {
       '--resume [session]',
       'Resume a previous session (optionally provide a session ID or prefix)',
     )
-    .action(async (opts: { model?: string; resume?: string | boolean }) => {
+    .option('-p, --print <prompt>', 'Run a single prompt non-interactively and exit (no REPL)')
+    .action(async (opts: { model?: string; resume?: string | boolean; print?: string }) => {
       const resume =
         opts.resume === true
           ? '__latest__'
           : typeof opts.resume === 'string'
             ? opts.resume
             : undefined;
-      await runApp({ model: opts.model, resume });
+      await runApp({ model: opts.model, resume, print: opts.print });
     });
 
   program.parseAsync(process.argv).catch((err) => {

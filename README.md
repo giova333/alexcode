@@ -84,6 +84,9 @@ node dist/index.js --model claude-sonnet-4-6
 
 # Resume a previous session
 node dist/index.js --resume [session-id]
+
+# Non-interactive one-shot: run a single prompt and exit (no REPL)
+node dist/index.js -p "list the files in src and summarize the layout"
 ```
 
 Type your message and press **Enter** to send. Use `\` at the end of a line for multiline input.
@@ -201,7 +204,7 @@ Diagnostics (mem0 init/ingest/search failures, MCP connection warnings) are writ
 
 ## Evaluations
 
-Beyond the deterministic Vitest suite, `evals/` holds **live** end-to-end evaluations that run the real agent against the Anthropic API on a throwaway workspace and grade the outcome:
+Beyond the deterministic Vitest suite, `evals/` holds **live** end-to-end evaluations that drive the **real CLI** (`node dist/index.js -p "<prompt>"`) against the Anthropic API on a throwaway workspace and grade the outcome:
 
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
